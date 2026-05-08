@@ -972,19 +972,28 @@ function JournalApp() {
 
   const importTrades = async (newTrades: any[]) => {
     if (!user) return;
-    const batch = writeBatch(db);
-    newTrades.forEach(t => {
-      const newDocRef = doc(collection(db, `users/${user.uid}/trades`));
-      batch.set(newDocRef, {
-        ...t,
-        userId: user.uid,
-        id: newDocRef.id,
-        createdAt: serverTimestamp()
-      });
-    });
+    
+    // Firestore batch limit is 500. Split into chunks.
+    const chunks = [];
+    for (let i = 0; i < newTrades.length; i += 500) {
+      chunks.push(newTrades.slice(i, i + 500));
+    }
 
     try {
-      await batch.commit();
+      for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach(t => {
+          const newDocRef = doc(collection(db, `users/${user.uid}/trades`));
+          batch.set(newDocRef, {
+            ...t,
+            userId: user.uid,
+            id: newDocRef.id,
+            createdAt: serverTimestamp()
+          });
+        });
+        await batch.commit();
+      }
+      
       showToast(`Successfully imported ${newTrades.length} trades`);
       setIsImportOpen(false);
       setActivePage('history');
@@ -2234,6 +2243,7 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
   const [importedData, setImportedData] = useState<any[]>([]);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [isParsing, setIsParsing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [rawRowsForAI, setRawRowsForAI] = useState<any[] | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
 
@@ -2513,23 +2523,36 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
 
             // Robust money parsing
             const profit = cleanMoney(profitStr);
-            const dateMatch = timeStr?.match(/(\d{4})[./-](\d{2})[./-](\d{2})/);
-            const formattedDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}` : new Date().toISOString().split('T')[0];
+            const dateMatch = timeStr?.match(/(\d{4})[./-](\d{2})[./-](\d{2})/) || 
+                             timeStr?.match(/(\d{2})[./-](\d{2})[./-](\d{4})/);
+            
+            let formattedDate = new Date().toISOString().split('T')[0];
+            if (dateMatch) {
+              if (dateMatch[1].length === 4) {
+                formattedDate = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+              } else {
+                formattedDate = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+              }
+            }
+
+            const timeMatch = timeStr?.match(/(\d{2}):(\d{2}):(\d{2})/) || timeStr?.match(/(\d{2}):(\d{2})/);
+            const formattedTime = timeMatch ? timeMatch[0] : new Date().toTimeString().slice(0, 5);
 
             return {
               date: formattedDate,
-              pair: symbol,
-              dir: type.includes('buy') ? 'Long' : 'Short',
+              time: formattedTime,
+              pair: symbol.toUpperCase(),
+              dir: (type.includes('buy') || type.includes('long')) ? 'Long' : 'Short',
               lot: cleanMoney(volume || '0.01'),
               entry: cleanMoney(price || '0'),
-              exit: 0,
+              exit: cleanMoney(getVal(['close price', 'exit price', 'close', 'exit']) || price || '0'),
               pnl: profit,
               currency: displayCurrency,
               result: profit > 0.0001 ? 'win' : (profit < -0.0001 ? 'loss' : 'be'),
               setup: 'MT5 HTML Import',
-              session: 'Asia',
+              session: 'London',
               emotion: 'Neutral',
-              notes: `Auto-imported from MT5 HTML Report`,
+              notes: `${getVal(['comment', 'notes']) || ''} (MT5 Import)`.trim(),
               news: 'no',
               plan: 'yes',
               ss: '',
@@ -2538,6 +2561,7 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
           }).filter(Boolean);
 
           finalizeImport(validTrades);
+          return; // STOP HERE if it was HTML
         } catch (err) {
           console.error("HTML Parse Error:", err);
           alert("Failed to parse the MT5 HTML file. Try exporting as CSV if this persists.");
@@ -2588,9 +2612,15 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
     reader.readAsText(file);
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
     const selectedTrades = importedData.filter((_, i) => selectedIndices.includes(i));
-    onImport(selectedTrades);
+    if (selectedTrades.length === 0) return;
+    setIsImporting(true);
+    try {
+      await onImport(selectedTrades);
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   return (
@@ -2684,10 +2714,10 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
 
             <button 
               onClick={handleImport}
-              disabled={selectedIndices.length === 0}
+              disabled={selectedIndices.length === 0 || isImporting}
               className="w-full bg-spotify-green disabled:opacity-30 disabled:cursor-not-allowed text-spotify-darker font-extrabold uppercase tracking-widest text-[11px] py-4 rounded-full hover:scale-[1.02] active:scale-[0.98] transition-all"
             >
-              Confirm Import ({selectedIndices.length} items)
+              {isImporting ? 'Syncing with Firestore...' : `Confirm Import (${selectedIndices.length} items)`}
             </button>
           </div>
         )}
