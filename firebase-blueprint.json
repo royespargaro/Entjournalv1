@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "Trade": {
+      "title": "Trade",
+      "description": "A recorded trading position",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the owner" },
+        "date": { "type": "string", "format": "date" },
+        "time": { "type": "string" },
+        "pair": { "type": "string" },
+        "dir": { "type": "string", "enum": ["Long", "Short"] },
+        "session": { "type": "string", "enum": ["Asia", "London", "New York"] },
+        "entry": { "type": "number" },
+        "exit": { "type": "number" },
+        "sl": { "type": "number" },
+        "tp": { "type": "number" },
+        "lot": { "type": "number" },
+        "pnl": { "type": "number" },
+        "result": { "type": "string", "enum": ["win", "loss", "be"] },
+        "setup": { "type": "string" },
+        "emotion": { "type": "string" },
+        "news": { "type": "string", "enum": ["no", "med", "high"] },
+        "plan": { "type": "string", "enum": ["yes", "no", "partial"] },
+        "dur": { "type": "string" },
+        "reason": { "type": "string" },
+        "notes": { "type": "string" },
+        "ss": { "type": "string", "description": "Base64 or URL of chart screenshot" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "date", "pair", "dir", "entry", "exit", "pnl", "result"]
+    },
+    "Review": {
+      "title": "Weekly Review",
+      "description": "A weekly performance reflection",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "week": { "type": "string", "format": "date" },
+        "q1": { "type": "string" },
+        "q2": { "type": "string" },
+        "q3": { "type": "string" },
+        "q4": { "type": "string" },
+        "q5": { "type": "string" },
+        "q6": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "week"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User specific settings and info",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "tradingMethod": { "type": "string" }
+      }
+    },
+    "TradingPlan": {
+      "title": "Trading Plan",
+      "description": "User's financial goals and targets",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "yearlyTarget": { "type": "number" },
+        "monthlyTarget": { "type": "number" },
+        "weeklyTarget": { "type": "number" },
+        "dailyTarget": { "type": "number" },
+        "currency": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "yearlyTarget"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile data"
+    },
+    "users/{userId}/plan/current": {
+      "schema": "TradingPlan",
+      "description": "Current trading plan and targets"
+    },
+    "users/{userId}/trades/{tradeId}": {
+      "schema": "Trade",
+      "description": "Individual trades for a user"
+    },
+    "users/{userId}/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Weekly reviews for a user"
+    }
+  }
+}
