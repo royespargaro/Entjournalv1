@@ -24,8 +24,11 @@ import {
   Zap,
   Trash2,
   Trash,
+  RotateCcw,
   MoreHorizontal,
-  Target
+  Target,
+  TrendingUp,
+  TrendingDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -101,6 +104,7 @@ interface Trade {
   reason: string;
   notes: string;
   ss?: string;
+  tags?: string[];
   createdAt: any;
   userId: string;
 }
@@ -466,13 +470,49 @@ const cleanMoney = (val: any): number => {
   if (typeof val === 'number') return val;
   
   let s = String(val).trim();
+  
+  // Normalize various dash characters (long dash, minus sign, etc.) to standard hyphen
+  s = s.replace(/[−–—]/g, '-');
+  
+  // Remove all spaces (especially thousand separators like 1 000.00)
+  s = s.replace(/\s+/g, ''); 
+  
   // Handle (100.00) format for negatives
   if (s.startsWith('(') && s.endsWith(')')) {
     s = '-' + s.substring(1, s.length - 1);
   }
-  // Strip everything except numbers, decimal points, and minus signs
+  
+  // International decimal support (e.g. 1.234,56 or 1,234.56)
+  if (s.includes(',') && !s.includes('.')) {
+    s = s.replace(',', '.');
+  } else if (s.includes(',') && s.includes('.')) {
+    if (s.lastIndexOf(',') < s.lastIndexOf('.')) {
+      s = s.replace(/,/g, '');
+    } else {
+      s = s.replace(/\./g, '').replace(',', '.');
+    }
+  } else if (s.includes(',')) {
+    s = s.replace(/,/g, '');
+  }
+
+  // Handle trailing minus (some banks/brokers)
+  if (s.endsWith('-')) {
+    s = '-' + s.substring(0, s.length - 1);
+  }
+
+  // Final cleanup: keep only digits, dot, and hyphen
   const cleaned = s.replace(/[^\d.\-]/g, '');
-  const parsed = parseFloat(cleaned);
+  
+  // Ensure we don't end up with multiple hyphens or dots if input was weird
+  const hasMinus = cleaned.startsWith('-');
+  const numericPart = cleaned.replace(/-/g, '');
+  const dotParts = numericPart.split('.');
+  let normalizedNumeric = dotParts[0];
+  if (dotParts.length > 1) {
+    normalizedNumeric += '.' + dotParts.slice(1).join('');
+  }
+  
+  const parsed = parseFloat((hasMinus ? '-' : '') + normalizedNumeric);
   return isNaN(parsed) ? 0 : parsed;
 };
 
@@ -680,8 +720,15 @@ function JournalApp() {
     const tradesPath = `users/${user.uid}/trades`;
     const qTrades = query(collection(db, tradesPath), orderBy('date', 'desc'));
     const unsubscribeTrades = onSnapshot(qTrades, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade));
-      setTrades(data);
+      const dbTrades = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Trade));
+      setTrades(prev => {
+        const tempTrades = prev.filter(t => t.id.startsWith('temp-'));
+        return [...tempTrades, ...dbTrades].sort((a, b) => {
+          const dateComp = b.date.localeCompare(a.date);
+          if (dateComp !== 0) return dateComp;
+          return (b.time || '').localeCompare(a.time || '');
+        });
+      });
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, tradesPath);
     });
@@ -689,7 +736,7 @@ function JournalApp() {
     const reviewsPath = `users/${user.uid}/reviews`;
     const qReviews = query(collection(db, reviewsPath), orderBy('week', 'desc'));
     const unsubscribeReviews = onSnapshot(qReviews, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Review));
       setReviews(data);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, reviewsPath);
@@ -897,7 +944,6 @@ function JournalApp() {
 
   const updateTrade = async (id: string, tradeData: any) => {
     if (!user) return;
-    const path = `users/${user.uid}/trades/${id}`;
     
     // Normalize data for Firestore
     const normalized = {
@@ -911,6 +957,17 @@ function JournalApp() {
       updatedAt: serverTimestamp(),
     };
 
+    if (id.startsWith('temp-')) {
+      // Optimistic/Local-only update for temporary trades
+      setTrades(prev => prev.map(t => t.id === id ? { ...t, ...normalized } : t));
+      showToast('Temporary trade updated locally');
+      setIsEditingTrade(false);
+      setSelectedTrade(null);
+      return;
+    }
+
+    const path = `users/${user.uid}/trades/${id}`;
+    
     try {
       await updateDoc(doc(db, path), normalized);
       
@@ -940,9 +997,40 @@ function JournalApp() {
     }
   };
 
+  const deleteReview = async (id: string) => {
+    if (!user) return;
+    if (window.confirm('Delete this weekly review?')) {
+      const path = `users/${user.uid}/reviews/${id}`;
+      try {
+        await deleteDoc(doc(db, path));
+        showToast('Review deleted');
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, path);
+      }
+    }
+  };
+
+  const deletePlan = async () => {
+    if (!user) return;
+    if (window.confirm('Are you sure you want to reset your trading plan? This will clear all targets.')) {
+      const path = `users/${user.uid}/plan/current`;
+      try {
+        await deleteDoc(doc(db, path));
+        showToast('Plan reset successfully');
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, path);
+      }
+    }
+  };
+
   const deleteTrade = async (id: string) => {
     if (!user) return;
     if (window.confirm('Delete this trade?')) {
+      if (id.startsWith('temp-')) {
+        setTrades(prev => prev.filter(t => t.id !== id));
+        return;
+      }
+
       const path = `users/${user.uid}/trades/${id}`;
       try {
         await deleteDoc(doc(db, path));
@@ -956,16 +1044,27 @@ function JournalApp() {
   const deleteMultipleTrades = async (ids: string[]) => {
     if (!user || ids.length === 0) return;
     if (window.confirm(`Delete ${ids.length} selected trades?`)) {
-      const batch = writeBatch(db);
-      ids.forEach(id => {
-        const path = `users/${user.uid}/trades/${id}`;
-        batch.delete(doc(db, path));
-      });
-      try {
-        await batch.commit();
-        showToast(`${ids.length} trades deleted`);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/trades`);
+      const realIds = ids.filter(id => !id.startsWith('temp-'));
+      const tempIds = ids.filter(id => id.startsWith('temp-'));
+
+      if (tempIds.length > 0) {
+        setTrades(prev => prev.filter(t => !tempIds.includes(t.id)));
+      }
+      
+      if (realIds.length > 0) {
+        const batch = writeBatch(db);
+        realIds.forEach(id => {
+          const path = `users/${user.uid}/trades/${id}`;
+          batch.delete(doc(db, path));
+        });
+        try {
+          await batch.commit();
+          showToast(`Successfully deleted ${realIds.length} trades`);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/trades`);
+        }
+      } else if (tempIds.length > 0) {
+        showToast(`${tempIds.length} temporary trades removed`);
       }
     }
   };
@@ -973,6 +1072,16 @@ function JournalApp() {
   const importTrades = async (newTrades: any[]) => {
     if (!user) return;
     
+    // Add trades to local state immediately for instant feedback
+    const optimisticTrades = newTrades.map(t => ({
+      ...t,
+      id: `temp-${Math.random().toString(36).substr(2, 9)}`,
+      userId: user.uid,
+      createdAt: new Date().toISOString()
+    }));
+    
+    setTrades(prev => [...optimisticTrades, ...prev]);
+
     // Firestore batch limit is 500. Split into chunks.
     const chunks = [];
     for (let i = 0; i < newTrades.length; i += 500) {
@@ -984,10 +1093,13 @@ function JournalApp() {
         const batch = writeBatch(db);
         chunk.forEach(t => {
           const newDocRef = doc(collection(db, `users/${user.uid}/trades`));
+          // Remove extra fields and ensure types
+          const { id, tempId, ...data } = t; 
           batch.set(newDocRef, {
-            ...t,
+            ...data,
             userId: user.uid,
-            id: newDocRef.id,
+            sl: t.sl ?? null,
+            tp: t.tp ?? null,
             createdAt: serverTimestamp()
           });
         });
@@ -998,6 +1110,7 @@ function JournalApp() {
       setIsImportOpen(false);
       setActivePage('history');
     } catch (error) {
+      console.error('Import batch error:', JSON.stringify(error));
       handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/trades`);
     }
   };
@@ -1087,10 +1200,10 @@ function JournalApp() {
               <AnalyticsPage trades={trades} displayCurrency={displayCurrency} />
             )}
             {activePage === 'review' && (
-              <ReviewPage reviews={reviews} />
+              <ReviewPage reviews={reviews} onDeleteReview={deleteReview} />
             )}
             {activePage === 'plan' && (
-              <PlanPage plan={tradingPlan} trades={trades} displayCurrency={displayCurrency} onSave={saveTradingPlan} />
+              <PlanPage plan={tradingPlan} trades={trades} displayCurrency={displayCurrency} onSave={saveTradingPlan} onReset={deletePlan} />
             )}
             {activePage === 'import' && (
               <ImportPage onTriggerImport={() => setIsImportOpen(true)} />
@@ -1155,6 +1268,7 @@ function JournalApp() {
         <Modal 
           onClose={() => { setSelectedTrade(null); setIsEditingTrade(false); setAiAnalysis(null); }} 
           title={isEditingTrade ? 'Edit Trade' : `${selectedTrade.pair} ${selectedTrade.dir}`}
+          showFooter={!isEditingTrade}
         >
           {isEditingTrade ? (
             <TradeForm 
@@ -1225,6 +1339,15 @@ function JournalApp() {
                 <div>
                   <div className="text-[10px] font-bold text-spotify-muted uppercase tracking-[0.1em] mb-2">Notes / Lessons</div>
                   <p className="text-sm text-spotify-muted leading-relaxed">{selectedTrade.notes}</p>
+                </div>
+              )}
+              {selectedTrade.tags && selectedTrade.tags.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedTrade.tags.map((tag: string, i: number) => (
+                    <span key={i} className="px-2 py-1 bg-spotify-green/10 text-spotify-green text-[9px] font-black uppercase tracking-widest rounded-md border border-spotify-green/20">
+                      #{tag}
+                    </span>
+                  ))}
                 </div>
               )}
               {selectedTrade.ss && (
@@ -1428,17 +1551,34 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
                     tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700 }}
                   />
                   <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#121212', 
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '8px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      color: '#fff'
+                    content={({ active, payload }: any) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload;
+                        const formattedPnL = formatCurrency(convertCurrency(data.tradeUsdPnl, 'USD', displayCurrency), displayCurrency);
+                        const formattedCumulative = formatCurrency(convertCurrency(data.cumulativeUsd, 'USD', displayCurrency), displayCurrency);
+                        
+                        return (
+                          <div className="bg-[#121212] border border-white/10 rounded-xl p-3 shadow-2xl backdrop-blur-md">
+                            <p className="text-[9px] font-black uppercase text-spotify-muted tracking-widest mb-2 pb-1.5 border-b border-white/5">
+                              {new Date(data.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                            </p>
+                            <div className="space-y-1.5 pt-0.5">
+                              <div className="flex items-center justify-between gap-8">
+                                <span className="text-[8px] font-black text-white/40 uppercase tracking-widest">Trade P&L</span>
+                                <span className={`text-[10px] font-black ${data.tradeUsdPnl >= 0 ? 'text-spotify-green' : 'text-red-500'}`}>
+                                  {data.tradeUsdPnl >= 0 ? '+' : ''}{formattedPnL}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-8">
+                                <span className="text-[8px] font-black text-white/40 uppercase tracking-widest">Equity</span>
+                                <span className="text-[10px] font-black text-white">{formattedCumulative}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
                     }}
-                    itemStyle={{ color: '#1DB954' }}
-                    labelStyle={{ color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}
-                    formatter={(value: number) => [formatCurrency(convertCurrency(value, 'USD', displayCurrency), displayCurrency), 'Cumulative P&L']}
                   />
                   <Area 
                     type="monotone" 
@@ -1646,7 +1786,7 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
   );
 }
 
-function PlanPage({ plan, trades, displayCurrency, onSave }: any) {
+function PlanPage({ plan, trades, displayCurrency, onSave, onReset }: any) {
   const [isEditing, setIsEditing] = useState(!plan);
   const [formData, setFormData] = useState(plan || {
     yearlyTarget: 120000,
@@ -1655,6 +1795,22 @@ function PlanPage({ plan, trades, displayCurrency, onSave }: any) {
     dailyTarget: 500,
     currency: displayCurrency
   });
+
+  // Update formData if plan changes (e.g. after reset)
+  useEffect(() => {
+    if (plan) {
+      setFormData(plan);
+    } else {
+      setFormData({
+        yearlyTarget: 120000,
+        monthlyTarget: 10000,
+        weeklyTarget: 2500,
+        dailyTarget: 500,
+        currency: displayCurrency
+      });
+      setIsEditing(true);
+    }
+  }, [plan, displayCurrency]);
 
   const currentPnl = trades.reduce((sum: number, t: any) => sum + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), 0);
 
@@ -1693,12 +1849,23 @@ function PlanPage({ plan, trades, displayCurrency, onSave }: any) {
           <h1 className="text-4xl font-black tracking-tighter text-white">Monthly <span className="text-spotify-green italic">Target</span></h1>
           <p className="text-xs font-bold text-spotify-muted uppercase tracking-[0.2em] mt-1">Anchor your discipline. Execute your blueprint.</p>
         </div>
-        <button 
-          onClick={() => setIsEditing(!isEditing)}
-          className="px-4 py-2 rounded-full border border-white/10 text-[10px] font-black uppercase tracking-widest hover:bg-white/5 transition-all text-white"
-        >
-          {isEditing ? 'Cancel' : 'Adjust Settings'}
-        </button>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setIsEditing(!isEditing)}
+            className="px-4 py-2 rounded-full border border-white/10 text-[10px] font-black uppercase tracking-widest hover:bg-white/5 transition-all text-white"
+          >
+            {isEditing ? 'Cancel' : 'Adjust Settings'}
+          </button>
+          {plan && (
+            <button 
+              onClick={onReset}
+              className="p-2 rounded-full border border-red-500/20 text-red-500/60 hover:bg-red-500/10 hover:text-red-500 transition-all"
+              title="Reset Plan"
+            >
+              <RotateCcw size={16} />
+            </button>
+          )}
+        </div>
       </div>
 
       {isEditing ? (
@@ -1954,6 +2121,8 @@ function CalculatorPage({ displayCurrency }: { displayCurrency: string }) {
 
 function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCurrency }: any) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isAutoLot, setIsAutoLot] = useState(!initialData);
   const defaults = {
     date: new Date().toISOString().split('T')[0],
     time: new Date().toTimeString().slice(0, 5),
@@ -1976,18 +2145,69 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     reason: '',
     notes: '',
     ss: '',
+    tags: [] as string[],
     riskPercent: '1',
     balance: '10000'
   };
 
-  const [form, setForm] = useState({ ...defaults, ...initialData });
+  const [form, setForm] = useState(() => {
+    // Check for draft if this is a new trade
+    if (!initialData) {
+      const savedDraft = localStorage.getItem('trade_draft');
+      if (savedDraft) {
+        try {
+          const draft = JSON.parse(savedDraft);
+          // If draft exists, ensure it uses current display currency if it was saved with one
+          if (displayCurrency) draft.currency = displayCurrency;
+          // Ensure tags is array
+          if (typeof draft.tags === 'string') {
+            draft.tags = draft.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+          }
+          return draft;
+        } catch (e) {
+          console.error("Failed to parse draft", e);
+        }
+      }
+    }
+
+    const data = { ...defaults, ...initialData };
+    if (initialData?.tags) {
+      data.tags = Array.isArray(initialData.tags) ? initialData.tags : initialData.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+    } else {
+      data.tags = [];
+    }
+    
+    // Always honor the current display currency even when editing
+    if (displayCurrency) {
+      data.currency = displayCurrency;
+    }
+    
+    return data;
+  });
+
+  // Auto-save draft to localStorage
+  useEffect(() => {
+    if (!initialData && form !== defaults) {
+      localStorage.setItem('trade_draft', JSON.stringify(form));
+    }
+  }, [form, initialData]);
 
   // Update form if initialData changes (e.g. switching trades while open)
   useEffect(() => {
     if (initialData) {
-      setForm(prev => ({ ...prev, ...initialData }));
+      const data = { ...initialData };
+      if (initialData.tags) {
+        data.tags = Array.isArray(initialData.tags) ? initialData.tags : initialData.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+      } else {
+        data.tags = [];
+      }
+      // If we are editing, we want to maintain the Global display currency preference
+      if (displayCurrency) {
+        data.currency = displayCurrency;
+      }
+      setForm(prev => ({ ...prev, ...data }));
     }
-  }, [initialData]);
+  }, [initialData, displayCurrency]);
 
   // Auto-calculate Session
   useEffect(() => {
@@ -2033,6 +2253,18 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     };
   }, [form.entry, form.sl, form.balance, form.riskPercent, form.pair]);
 
+  // Handle auto-lot calculation
+  useEffect(() => {
+    if (isAutoLot && riskCalculation) {
+      setForm(prev => {
+        if (prev.lot !== riskCalculation.lot) {
+          return { ...prev, lot: riskCalculation.lot };
+        }
+        return prev;
+      });
+    }
+  }, [riskCalculation, isAutoLot]);
+
   useEffect(() => {
     // Only auto-calculate if we have valid numbers for the math
     const entry = parseFloat(form.entry);
@@ -2073,21 +2305,38 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+    
+    setError(null);
+    const entryNum = cleanMoney(form.entry);
+    const slNum = cleanMoney(form.sl);
+    
+    if (isNaN(entryNum) || entryNum === 0) {
+      setError("Entry price must be a valid number");
+      return;
+    }
+    
+    if (slNum !== 0 && entryNum === slNum) {
+      setError("Stop loss cannot be equal to entry price");
+      return;
+    }
+
     setIsSubmitting(true);
     
     try {
       await onSubmit({
         ...form,
-        entry: parseFloat(form.entry),
-        exit: parseFloat(form.exit),
-        pnl: parseFloat(form.pnl),
-        sl: parseFloat(form.sl) || 0,
-        tp: parseFloat(form.tp) || 0,
-        lot: parseFloat(form.lot) || 0.01
+        tags: form.tags,
+        entry: entryNum,
+        exit: cleanMoney(form.exit),
+        pnl: cleanMoney(form.pnl),
+        sl: slNum,
+        tp: cleanMoney(form.tp),
+        lot: cleanMoney(form.lot) || 0.01
       });
       
       if (!initialData) {
         setForm((prev: any) => ({ ...prev, entry: '', exit: '', pnl: '', dur: '', reason: '', notes: '', ss: '' }));
+        localStorage.removeItem('trade_draft');
       }
     } finally {
       setIsSubmitting(false);
@@ -2141,7 +2390,20 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
         <div className="bg-spotify-card p-6 rounded-lg space-y-6">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Risk Guardian</h3>
-            <Zap size={14} className="text-spotify-green animate-pulse" />
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] font-black uppercase text-spotify-muted">Auto-Size</span>
+              <button 
+                type="button"
+                onClick={() => setIsAutoLot(!isAutoLot)}
+                className={`w-8 h-4 rounded-full relative transition-colors ${isAutoLot ? 'bg-spotify-green' : 'bg-white/10'}`}
+              >
+                <motion.div 
+                  animate={{ x: isAutoLot ? 16 : 2 }}
+                  className="absolute top-1 left-0 w-2 h-2 bg-white rounded-full"
+                />
+              </button>
+              <Zap size={14} className={isAutoLot ? "text-spotify-green animate-pulse" : "text-white/20"} />
+            </div>
           </div>
           
           <div className="space-y-4">
@@ -2161,13 +2423,15 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
                     <p className="text-[10px] font-black uppercase tracking-widest text-spotify-muted mb-1">Recommended Lot</p>
                     <p className="text-3xl font-black text-white tracking-tighter">{riskCalculation.lot} <span className="text-sm text-spotify-green">lots</span></p>
                   </div>
-                  <button 
-                    type="button"
-                    onClick={() => setForm({ ...form, lot: riskCalculation.lot })}
-                    className="bg-spotify-green text-black text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full hover:scale-105 transition-transform"
-                  >
-                    Apply Size
-                  </button>
+                  {!isAutoLot && (
+                    <button 
+                      type="button"
+                      onClick={() => { setForm({ ...form, lot: riskCalculation.lot }); setIsAutoLot(true); }}
+                      className="bg-spotify-green text-black text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full hover:scale-105 transition-transform"
+                    >
+                      Apply Size
+                    </button>
+                  )}
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4 pt-3 border-t border-white/5">
@@ -2196,7 +2460,7 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
             <Input label="Time (UTC)" type="time" value={form.time} onChange={(v:any) => setForm({ ...form, time: v })} />
             <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm({ ...form, pair: v })} />
             <Select label="Direction" value={form.dir} options={['Short', 'Long']} onChange={(v:any) => setForm({ ...form, dir: v as any })} />
-            <Input label="Lot Size" type="number" step="0.01" placeholder="0.10" value={form.lot} onChange={(v:any) => setForm({ ...form, lot: v })} />
+            <Input label="Lot Size" type="number" step="0.01" placeholder="0.10" value={form.lot} onChange={(v:any) => { setForm({ ...form, lot: v }); setIsAutoLot(false); }} />
             <Select label="Currency" value={form.currency} options={Object.keys(CURRENCIES)} onChange={(v:any) => setForm({ ...form, currency: v as any })} />
             <Input label="Entry Price" type="number" step="0.01" placeholder="2035.50" value={form.entry} onChange={(v:any) => setForm({ ...form, entry: v })} />
             <Input label="Exit Price" type="number" step="0.01" placeholder="2045.50" value={form.exit} onChange={(v:any) => setForm({ ...form, exit: v })} />
@@ -2216,6 +2480,14 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
             <Select label="Emotion" value={form.emotion} options={['Calm / Confident', 'Excited / Rushed', 'Fearful / Hesitant', 'Revenge']} onChange={(v:any) => setForm({ ...form, emotion: v })} />
             <Select label="Followed Plan?" value={form.plan} options={[{ label: 'Yes ✅', value: 'yes' }, { label: 'No ❌', value: 'no' }, { label: 'Partial', value: 'partial' }]} onChange={(v:any) => setForm({ ...form, plan: v as any })} />
             <Select label="News impact" value={form.news} options={[{ label: 'No News', value: 'no' }, { label: 'Med Impact', value: 'med' }, { label: 'High Impact', value: 'high' }]} onChange={(v:any) => setForm({ ...form, news: v as any })} />
+            <div className="sm:col-span-2">
+              <TagInput 
+                label="Tags" 
+                value={form.tags} 
+                onChange={(tags: string[]) => setForm({ ...form, tags })} 
+                placeholder="Add tags... (Enter or comma to add)" 
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -2225,6 +2497,13 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
         <TextArea label="Reason for Entry" value={form.reason} onChange={(v:any) => setForm({ ...form, reason: v })} placeholder="Confluences, bias, timeframe analysis..." />
         <TextArea label="Notes / Lesson Learned" value={form.notes} onChange={(v:any) => setForm({ ...form, notes: v })} placeholder="What did you do well? What will you do differently next time?" />
       </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-center gap-3">
+          <AlertCircle size={18} className="text-red-500 shrink-0" />
+          <p className="text-xs font-bold text-red-500">{error}</p>
+        </div>
+      )}
 
       <button 
         type="submit" 
@@ -2256,30 +2535,6 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
     setImportedData(validTrades);
     setSelectedIndices(validTrades.map((_, i) => i));
     setIsParsing(false);
-  };
-
-  const cleanMoney = (val: any) => {
-    if (val === undefined || val === null) return 0;
-    let s = String(val).trim().replace(/\s/g, ''); 
-    
-    // Handle specific currency symbols or common MT5 prefixes
-    s = s.replace(/[^\d.,\-]/g, '');
-
-    if (s.startsWith('(') && s.endsWith(')')) {
-      s = '-' + s.substring(1, s.length - 1);
-    }
-
-    if (s.includes(',') && !s.includes('.')) {
-      s = s.replace(',', '.');
-    } else if (s.includes(',') && s.includes('.')) {
-      if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
-        s = s.replace(/\./g, '').replace(',', '.');
-      } else {
-        s = s.replace(/,/g, '');
-      }
-    }
-    const matches = s.match(/-?\d*\.?\d+/);
-    return matches ? parseFloat(matches[0]) : 0;
   };
 
   const aiSmartParse = async (sampleData: any[]) => {
@@ -2350,6 +2605,8 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
         const volumeKey = findKey(['volume', 'size', 'lot', 'amount', 'qty', 'unit', 'vol']);
         const ticketKey = findKey(['ticket', 'order', 'id', 'deal', 'ref', 'no', 'num', 'key']);
         const notesKey = findKey(['comment', 'notes', 'remark', 'msg']);
+        const slKey = findKey(['s / l', 'sl', 'stop loss', 's/l']);
+        const tpKey = findKey(['t / p', 'tp', 'take profit', 't/p']);
 
         if (!itemKey || !typeKey || !row[itemKey] || !row[typeKey]) return null;
         
@@ -2367,34 +2624,46 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
         
         let formattedDate = new Date().toISOString().split('T')[0];
         if (dateMatch) {
-          if (dateMatch[1].length === 4) {
-            formattedDate = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+          // Normalize to YYYY-MM-DD
+          const [_, p1, p2, p3] = dateMatch;
+          if (p1.length === 4) {
+            // YYYY.MM.DD or YYYY-MM-DD
+            formattedDate = `${p1}-${p2}-${p3}`;
           } else {
-            formattedDate = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+            // DD.MM.YYYY or MM.DD.YYYY? 
+            if (p3.length === 4) {
+              formattedDate = `${p3}-${p2}-${p1}`;
+            }
           }
         }
         
         const timeMatch = dateStr.match(/(\d{2}):(\d{2}):(\d{2})/) || dateStr.match(/(\d{2}):(\d{2})/);
         const formattedTime = timeMatch ? timeMatch[0] : new Date().toTimeString().slice(0, 5);
 
+        const sl = slKey ? cleanMoney(row[slKey]) : 0;
+        const tp = tpKey ? cleanMoney(row[tpKey]) : 0;
+
         return {
           date: formattedDate,
           time: formattedTime,
-          pair: String(row[itemKey]).toUpperCase(),
+          pair: String(row[itemKey]).toUpperCase().trim(),
           dir: (type.includes('buy') || type.includes('long') || type.includes('in')) ? 'Long' : 'Short',
           lot: cleanMoney(row[volumeKey!] || '0.01'),
           entry: cleanMoney(row[openPriceKey!] || '0'),
           exit: cleanMoney(row[exitPriceKey!] || row[openPriceKey!] || '0'), 
+          sl: sl || null,
+          tp: tp || null,
           pnl: profit,
           currency: displayCurrency,
           result: profit > 0.0001 ? 'win' : (profit < -0.0001 ? 'loss' : 'be'),
           setup: aiMapping ? 'AI Smart Import' : 'MT5 Import',
-          session: 'London', // Default
+          session: 'London',
           emotion: 'Neutral',
           notes: `${row[notesKey!] || ''} (MT5 ticket ${row[ticketKey || ''] || 'N/A'})`.trim(),
           news: 'no',
           plan: 'yes',
           ss: '',
+          dur: '',
           reason: 'MT5 History Export'
         };
       })
@@ -2507,48 +2776,74 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
             const cells = Array.from(row.cells).map(c => c.textContent?.trim() || '');
             if (cells.length < headers.length) return null;
 
-            const getVal = (terms: string[]) => {
-              const idx = headers.findIndex(h => terms.some(t => h.includes(t)));
-              return idx !== -1 ? cells[idx] : null;
+            const getAllIndices = (terms: string[]) => {
+              const indices: number[] = [];
+              headers.forEach((h, i) => {
+                if (terms.some(t => h.includes(t))) indices.push(i);
+              });
+              return indices;
+            };
+
+            const getVal = (terms: string[], last = false) => {
+              const idxs = getAllIndices(terms);
+              if (idxs.length === 0) return null;
+              const idx = last ? idxs[idxs.length - 1] : idxs[0];
+              return cells[idx] || null;
             };
 
             const symbol = getVal(['symbol', 'item']);
-            const type = getVal(['type'])?.toLowerCase();
-            const profitStr = getVal(['profit', 'p/l']);
-            const timeStr = getVal(['time', 'date']);
+            const typeValue = getVal(['type'])?.toLowerCase() || '';
+            const profitStr = getVal(['profit', 'p/l'], true); // Usually the last column
+            const commissionStr = getVal(['commission']);
+            const swapStr = getVal(['swap']);
+            const timeStr = getVal(['time', 'date']); // Entry time
             const volume = getVal(['volume', 'size', 'lot']);
-            const price = getVal(['price', 'open price']);
+            const entryPrice = getVal(['price']); // First Price column
+            const exitPrice = getVal(['price'], true); // Last Price column
+            const slStr = getVal(['s / l', 'sl', 'stop loss', 's/l']);
+            const tpStr = getVal(['t / p', 'tp', 'take profit', 't/p']);
 
-            if (!symbol || !type || !profitStr || type.includes('balance') || type.includes('deposit')) return null;
+            if (!symbol || !typeValue || !profitStr) return null;
+            if (typeValue.includes('balance') || typeValue.includes('deposit') || typeValue.includes('withdrawal') || typeValue.includes('credit')) return null;
 
             // Robust money parsing
-            const profit = cleanMoney(profitStr);
+            const profitValue = cleanMoney(profitStr);
+            const commission = cleanMoney(commissionStr || '0');
+            const swap = cleanMoney(swapStr || '0');
+            const netProfit = profitValue + commission + swap;
+
             const dateMatch = timeStr?.match(/(\d{4})[./-](\d{2})[./-](\d{2})/) || 
                              timeStr?.match(/(\d{2})[./-](\d{2})[./-](\d{4})/);
             
             let formattedDate = new Date().toISOString().split('T')[0];
             if (dateMatch) {
-              if (dateMatch[1].length === 4) {
-                formattedDate = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
-              } else {
-                formattedDate = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+              const [_, p1, p2, p3] = dateMatch;
+              if (p1.length === 4) {
+                formattedDate = `${p1}-${p2}-${p3}`;
+              } else if (p3.length === 4) {
+                formattedDate = `${p3}-${p2}-${p1}`;
               }
             }
 
             const timeMatch = timeStr?.match(/(\d{2}):(\d{2}):(\d{2})/) || timeStr?.match(/(\d{2}):(\d{2})/);
             const formattedTime = timeMatch ? timeMatch[0] : new Date().toTimeString().slice(0, 5);
 
+            const sl = slStr ? cleanMoney(slStr) : 0;
+            const tp = tpStr ? cleanMoney(tpStr) : 0;
+
             return {
               date: formattedDate,
               time: formattedTime,
-              pair: symbol.toUpperCase(),
-              dir: (type.includes('buy') || type.includes('long')) ? 'Long' : 'Short',
+              pair: symbol.toUpperCase().trim(),
+              dir: (typeValue.includes('buy') || typeValue.includes('long')) ? 'Long' : 'Short',
               lot: cleanMoney(volume || '0.01'),
-              entry: cleanMoney(price || '0'),
-              exit: cleanMoney(getVal(['close price', 'exit price', 'close', 'exit']) || price || '0'),
-              pnl: profit,
+              entry: cleanMoney(entryPrice || '0'),
+              exit: cleanMoney(exitPrice || entryPrice || '0'),
+              sl: sl || null,
+              tp: tp || null,
+              pnl: netProfit,
               currency: displayCurrency,
-              result: profit > 0.0001 ? 'win' : (profit < -0.0001 ? 'loss' : 'be'),
+              result: netProfit > 0.0001 ? 'win' : (netProfit < -0.0001 ? 'loss' : 'be'),
               setup: 'MT5 HTML Import',
               session: 'London',
               emotion: 'Neutral',
@@ -2556,6 +2851,7 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
               news: 'no',
               plan: 'yes',
               ss: '',
+              dur: '',
               reason: 'MT5 History Export'
             };
           }).filter(Boolean);
@@ -2624,7 +2920,7 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
   };
 
   return (
-    <Modal onClose={onClose} title="MT5 CSV Importer">
+    <Modal onClose={onClose} title="MT5 CSV Importer" showFooter={false}>
       <div className="space-y-6">
         <div className="bg-spotify-card border border-dashed border-white/10 rounded-2xl p-8 flex flex-col items-center justify-center text-center">
           <div className="bg-spotify-green/20 p-4 rounded-full mb-4">
@@ -2813,9 +3109,21 @@ function BulkEditModal({ isOpen, onClose, onSave, count }: any) {
 function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDate, setEndDate, onTradeClick, onDelete, onBulkDelete, onBulkUpdate, onImportOpen, displayCurrency, setIsEditingTrade }: any) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [search, setSearch] = useState('');
   
   const filteredTrades = useMemo(() => {
     let result = trades;
+
+    // Filter by search term (pair, setup, notes, tags)
+    if (search) {
+      const term = search.toLowerCase();
+      result = result.filter((t: any) => 
+        t.pair?.toLowerCase().includes(term) ||
+        t.setup?.toLowerCase().includes(term) ||
+        t.notes?.toLowerCase().includes(term) ||
+        (Array.isArray(t.tags) ? t.tags.some((tag: string) => tag.toLowerCase().includes(term)) : t.tags?.toLowerCase?.().includes?.(term))
+      );
+    }
 
     // Filter by type/direction
     if (filter === 'win') result = result.filter((t: any) => t.result === 'win');
@@ -2832,7 +3140,7 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
     }
 
     return result;
-  }, [trades, filter, startDate, endDate]);
+  }, [trades, filter, startDate, endDate, search]);
 
   const avgPerformance = useMemo(() => {
     const wins = trades.filter((t: any) => t.result === 'win').map((t: any) => Math.abs(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD')));
@@ -2873,6 +3181,19 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
         </div>
         
         <div className="flex flex-col sm:flex-row flex-wrap gap-4 items-start sm:items-center">
+          <div className="w-full sm:w-auto relative group">
+            <input 
+              type="text"
+              placeholder="Search pairs, setups, tags..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full sm:w-64 bg-white/5 border border-white/10 rounded-full py-3 pl-10 pr-4 text-xs font-bold text-white outline-none focus:border-spotify-green focus:bg-white/[0.08] transition-all"
+            />
+            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-spotify-muted group-focus-within:text-spotify-green transition-colors">
+              <Sparkles size={14} />
+            </div>
+          </div>
+
           <button 
             onClick={onImportOpen}
             className="w-full sm:w-auto flex items-center justify-center gap-2 bg-spotify-green text-spotify-darker font-extrabold uppercase tracking-widest text-[10px] px-6 py-3 rounded-full hover:scale-105 transition-all"
@@ -3071,6 +3392,7 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
 
 function CalendarPage({ trades, displayCurrency }: any) {
   const [viewDate, setViewDate] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState<any>(null);
   
   const monthLabel = viewDate.toLocaleString('default', { month: 'long', year: 'numeric' });
   const firstDay = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
@@ -3105,7 +3427,7 @@ function CalendarPage({ trades, displayCurrency }: any) {
       arr.push({ day: i, current: false });
     }
     return arr;
-  }, [viewDate, trades]);
+  }, [viewDate, trades, monthKey, startOffset, daysInMonth]);
 
   return (
     <div className="space-y-6 md:space-y-8">
@@ -3139,20 +3461,88 @@ function CalendarPage({ trades, displayCurrency }: any) {
           {days.map((d, i) => (
             <div 
               key={i} 
-              className={`min-h-[70px] md:min-h-[110px] border-r border-b border-white/5 p-1 md:p-2 transition-colors flex flex-col ${d.current ? 'bg-transparent' : 'bg-black/20 text-white/5'}`}
+              onClick={() => d.current && d.trades.length > 0 && setSelectedDay(d)}
+              className={`min-h-[70px] md:min-h-[110px] border-r border-b border-white/5 p-1 md:p-2 transition-all flex flex-col group relative ${d.current ? 'bg-transparent cursor-pointer hover:bg-white/[0.03]' : 'bg-black/20 text-white/5'}`}
             >
-              <span className={`text-[10px] md:text-xs font-bold mb-1 ${d.current ? 'text-spotify-muted' : 'text-white/10'}`}>{d.day}</span>
-              {d.current && d.pnl !== 0 && (
-                <div className={`mt-auto p-1.5 md:p-2 rounded-lg flex flex-col items-center justify-center text-center ${d.pnl >= 0 ? 'bg-spotify-green/10 text-spotify-green' : 'bg-red-500/10 text-red-500'}`}>
+              <span className={`text-[10px] md:text-xs font-bold mb-1 ${d.current ? 'text-spotify-muted group-hover:text-white' : 'text-white/10'}`}>{d.day}</span>
+              
+              {d.current && d.trades.length > 0 && (
+                <div className={`mt-auto p-1.5 md:p-2 rounded-lg flex flex-col items-center justify-center text-center transition-transform group-hover:scale-105 ${d.pnl > 0 ? 'bg-spotify-green/10 text-spotify-green border border-spotify-green/20' : d.pnl < 0 ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-white/5 text-white/50 border border-white/10'}`}>
                   <span className="text-[10px] md:text-sm font-black tracking-tighter">{formatCurrency(convertCurrency(d.pnl, 'USD', displayCurrency), displayCurrency)}</span>
-                  <span className="text-[7px] md:text-[8px] font-bold uppercase opacity-50 block md:hidden">{d.trades.length}T</span>
-                  <span className="text-[8px] font-bold uppercase opacity-50 hidden md:block">{d.trades.length} Trades</span>
+                  <span className="text-[7px] md:text-[8px] font-bold uppercase opacity-70 mt-0.5">{d.trades.length} {d.trades.length === 1 ? 'Trade' : 'Trades'}</span>
+                </div>
+              )}
+              
+              {d.current && d.trades.length > 0 && (
+                <div className="absolute top-2 right-2 flex gap-0.5">
+                  {d.trades.slice(0, 3).map((t: any, idx: number) => (
+                    <div key={idx} className={`w-1 h-1 rounded-full ${t.result === 'win' ? 'bg-spotify-green' : t.result === 'loss' ? 'bg-red-500' : 'bg-yellow-500'}`} />
+                  ))}
+                  {d.trades.length > 3 && <div className="w-1 h-1 rounded-full bg-white/30" />}
                 </div>
               )}
             </div>
           ))}
         </div>
       </div>
+
+      {selectedDay && (
+        <Modal 
+          onClose={() => setSelectedDay(null)} 
+          title={`${new Date(selectedDay.date).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`}
+          showFooter={false}
+        >
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest mb-1 text-center">Total P&L</p>
+                <p className={`text-2xl font-black text-center ${selectedDay.pnl >= 0 ? 'text-spotify-green' : 'text-red-500'}`}>
+                  {selectedDay.pnl >= 0 ? '+' : ''}{formatCurrency(convertCurrency(selectedDay.pnl, 'USD', displayCurrency), displayCurrency)}
+                </p>
+              </div>
+              <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest mb-1 text-center">Trade Count</p>
+                <p className="text-2xl font-black text-center text-white">{selectedDay.trades.length}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="text-xs font-black text-spotify-muted uppercase tracking-widest flex items-center gap-2">
+                <Zap size={14} className="text-spotify-green" /> 
+                Day's Transactions
+              </h3>
+              <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 scrollbar-hide">
+                {selectedDay.trades.map((t: any) => (
+                  <div key={t.id} className="bg-white/5 hover:bg-white/[0.08] p-4 rounded-xl border border-white/5 flex items-center justify-between transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-[10px] ${t.result === 'win' ? 'bg-spotify-green/20 text-spotify-green' : t.result === 'loss' ? 'bg-red-500/20 text-red-500' : 'bg-yellow-500/20 text-yellow-500'}`}>
+                        {t.dir === 'Long' ? 'BUY' : 'SEL'}
+                      </div>
+                      <div>
+                        <p className="text-sm font-black text-white">{t.pair}</p>
+                        <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest">{t.time} • {t.setup || 'No Setup'}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-sm font-black ${cleanMoney(t.pnl) >= 0 ? 'text-spotify-green' : 'text-red-500'}`}>
+                        {cleanMoney(t.pnl) >= 0 ? '+' : ''}{formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency)}
+                      </p>
+                      <p className="text-[9px] font-bold text-spotify-muted uppercase tracking-widest">{t.risk || 'No Risk'}% Risk</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            <button 
+              onClick={() => setSelectedDay(null)}
+              className="w-full bg-white text-black font-black uppercase tracking-widest text-xs py-4 rounded-full hover:bg-spotify-green transition-all"
+            >
+              Close Details
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -3234,11 +3624,48 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
       };
     });
 
+    // Best and Worst Trades
+    const tradesWithUsdPnl = trades.map((t: any) => ({
+      ...t,
+      usdPnl: convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD')
+    }));
+    const bestTrade = tradesWithUsdPnl.length > 0 ? tradesWithUsdPnl.reduce((max: any, t: any) => (t.usdPnl > max.usdPnl) ? t : max, tradesWithUsdPnl[0]) : null;
+    const worstTrade = tradesWithUsdPnl.length > 0 ? tradesWithUsdPnl.reduce((min: any, t: any) => (t.usdPnl < min.usdPnl) ? t : min, tradesWithUsdPnl[0]) : null;
+
+    // Average R:R
+    const tradesWithRR = trades.filter((t: any) => {
+      const entry = cleanMoney(t.entry);
+      const exit = cleanMoney(t.exit);
+      const sl = cleanMoney(t.sl);
+      return entry > 0 && exit > 0 && sl > 0 && entry !== sl;
+    }).map((t: any) => {
+      const entry = cleanMoney(t.entry);
+      const exit = cleanMoney(t.exit);
+      const sl = cleanMoney(t.sl);
+      const risk = Math.abs(entry - sl);
+      const reward = Math.abs(exit - entry);
+      return reward / risk;
+    });
+    const avgRR = tradesWithRR.length ? (tradesWithRR.reduce((a, b) => a + b, 0) / tradesWithRR.length).toFixed(2) : '0.00';
+
+    // News Impact
+    const newsImpactMap: any = { high: 0, med: 0, no: 0 };
+    trades.forEach((t: any) => {
+      const impact = t.news || 'no';
+      if (newsImpactMap[impact] !== undefined) newsImpactMap[impact]++;
+      else newsImpactMap['no']++;
+    });
+    const newsData = [
+      { name: 'High Impact', value: newsImpactMap.high },
+      { name: 'Med Impact', value: newsImpactMap.med },
+      { name: 'No News', value: newsImpactMap.no }
+    ];
+
     return { 
       sessionData, swr, lwr, emotionData, 
       shortsCount: shorts.length, longsCount: longs.length,
       setupPerformanceData, sessionTrendData, setupTrendData,
-      topSetups
+      topSetups, bestTrade, worstTrade, avgRR, newsData
     };
   }, [trades]);
 
@@ -3255,10 +3682,42 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Short Win Rate" value={`${chartData.swr}%`} sub={`${chartData.shortsCount} trades`} />
         <StatCard label="Long Win Rate" value={`${chartData.lwr}%`} sub={`${chartData.longsCount} trades`} />
-        <StatCard label="Best Session" value={chartData.sessionData.sort((a,b)=>b.wr-a.wr)[0].name} sub="Highest Win Rate" />
+        <StatCard label="Avg Risk:Reward" value={`1:${chartData.avgRR}`} sub="Target vs Risk" />
+        <StatCard 
+          label="Best Session" 
+          value={chartData.sessionData.length > 0 ? [...chartData.sessionData].sort((a:any, b:any) => b.wr - a.wr)[0].name : "None"} 
+          sub="Highest Win Rate" 
+        />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-spotify-green/10 border border-spotify-green/20 p-6 rounded-2xl flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase text-spotify-green tracking-[0.2em] mb-1">Best Winning Trade</p>
+            <p className="text-3xl font-black text-white">{formatCurrency(convertCurrency(chartData.bestTrade?.usdPnl || 0, 'USD', displayCurrency), displayCurrency)}</p>
+            <p className="text-[10px] font-bold text-spotify-muted mt-1 uppercase tracking-widest">
+              {chartData.bestTrade ? `${chartData.bestTrade.pair} • ${chartData.bestTrade.date}` : 'No trades yet'}
+            </p>
+          </div>
+          <div className="bg-spotify-green p-3 rounded-full text-black">
+            <TrendingUp size={24} />
+          </div>
+        </div>
+        <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-2xl flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase text-red-500 tracking-[0.2em] mb-1">Worst Losing Trade</p>
+            <p className="text-3xl font-black text-white">{formatCurrency(convertCurrency(chartData.worstTrade?.usdPnl || 0, 'USD', displayCurrency), displayCurrency)}</p>
+            <p className="text-[10px] font-bold text-spotify-muted mt-1 uppercase tracking-widest">
+              {chartData.worstTrade ? `${chartData.worstTrade.pair} • ${chartData.worstTrade.date}` : 'No trades yet'}
+            </p>
+          </div>
+          <div className="bg-red-500 p-3 rounded-full text-white">
+            <TrendingDown size={24} />
+          </div>
+        </div>
       </div>
 
       {/* Equity Curves Section */}
@@ -3386,6 +3845,17 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
               ))}
            </div>
            <div className="mt-8 bg-white/5 p-8 rounded-xl text-center">
+              <h4 className="text-[10px] font-extrabold text-spotify-muted uppercase tracking-widest mb-6">News Impact Breakdown</h4>
+              <div className="grid grid-cols-3 gap-4">
+                {chartData.newsData.map((n: any) => (
+                  <div key={n.name} className="space-y-1">
+                    <p className={`text-2xl font-black ${n.value > 0 ? 'text-white' : 'text-white/20'}`}>{n.value}</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-spotify-muted">{n.name}</p>
+                  </div>
+                ))}
+              </div>
+           </div>
+           <div className="mt-8 bg-white/5 p-8 rounded-xl text-center">
               <h4 className="text-[10px] font-extrabold text-spotify-muted uppercase tracking-widest mb-4">Win Rate by Emotion</h4>
               <div className="flex flex-wrap justify-center gap-2">
                 {chartData.emotionData.map(e => (
@@ -3402,7 +3872,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
   );
 }
 
-function ReviewPage({ reviews }: any) {
+function ReviewPage({ reviews, onDeleteReview }: any) {
   const { user, showToast } = useAuth();
   const [form, setForm] = useState({
     week: new Date().toISOString().split('T')[0],
@@ -3459,9 +3929,15 @@ function ReviewPage({ reviews }: any) {
       <div className="space-y-4">
         <h3 className="text-xs font-extrabold uppercase tracking-[0.2em] text-white/30 text-center">Previous Archives</h3>
         {reviews.map((r: Review) => (
-          <div key={r.id} className="bg-spotify-card p-6 rounded-xl border border-white/5 opacity-80 hover:opacity-100 transition-opacity">
+          <div key={r.id} className="bg-spotify-card p-6 rounded-xl border border-white/5 opacity-80 hover:opacity-100 transition-opacity relative group">
             <div className="flex justify-between items-center mb-4">
               <span className="text-[10px] font-extrabold uppercase tracking-widest text-spotify-green">Archive {r.week}</span>
+              <button 
+                onClick={() => onDeleteReview(r.id)}
+                className="opacity-0 group-hover:opacity-100 p-2 text-spotify-muted hover:text-red-500 transition-all"
+              >
+                <Trash2 size={14} />
+              </button>
             </div>
             <div className="space-y-3">
               <p className="text-sm font-bold text-white"><span className="text-spotify-muted font-normal block text-[10px] uppercase tracking-widest mb-1">Weekly Mission</span> {r.q6}</p>
@@ -3566,7 +4042,7 @@ function StatItem({ label, value, mono, color = 'text-white', bold }: any) {
   );
 }
 
-function Modal({ children, onClose, title }: any) {
+function Modal({ children, onClose, title, showFooter = true }: any) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 md:p-4">
       <motion.div 
@@ -3593,12 +4069,68 @@ function Modal({ children, onClose, title }: any) {
         <div className="p-6 md:p-10 overflow-y-auto scrollbar-hide">
           {children}
         </div>
-        <div className="px-6 md:px-10 pb-6 md:pb-10 pt-4 flex gap-4">
-           <button onClick={onClose} className="flex-1 bg-white hover:bg-spotify-green text-black font-black uppercase tracking-[0.2em] text-[11px] md:text-xs py-4 rounded-full transition-all hover:scale-[1.02] active:scale-98 shadow-xl">
-            Complete View
-          </button>
-        </div>
+        {showFooter && (
+          <div className="px-6 md:px-10 pb-6 md:pb-10 pt-4 flex gap-4">
+            <button onClick={onClose} className="flex-1 bg-white hover:bg-spotify-green text-black font-black uppercase tracking-[0.2em] text-[11px] md:text-xs py-4 rounded-full transition-all hover:scale-[1.02] active:scale-98 shadow-xl">
+              Complete View
+            </button>
+          </div>
+        )}
       </motion.div>
+    </div>
+  );
+}
+
+function TagInput({ label, value, onChange, placeholder }: { label: string, value: string[], onChange: (tags: string[]) => void, placeholder?: string }) {
+  const [inputValue, setInputValue] = useState('');
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const tag = inputValue.trim().replace(/,$/, '');
+      if (tag && !value.includes(tag)) {
+        onChange([...value, tag]);
+        setInputValue('');
+      } else if (tag) {
+        setInputValue('');
+      }
+    } else if (e.key === 'Backspace' && !inputValue && value.length > 0) {
+      onChange(value.slice(0, -1));
+    }
+  };
+
+  const removeTag = (tagToRemove: string) => {
+    onChange(value.filter(t => t !== tagToRemove));
+  };
+
+  return (
+    <div className="space-y-1.5 flex flex-col group min-w-0">
+      <label className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/30 ml-1 group-focus-within:text-spotify-green transition-colors truncate">{label}</label>
+      <div className="bg-white/5 border border-white/10 rounded-md px-2 py-2 flex flex-wrap gap-2 outline-none focus-within:border-spotify-green transition-all w-full min-h-[42px]">
+        {value.map(tag => (
+          <span 
+            key={tag} 
+            className="bg-spotify-green/10 text-spotify-green text-[10px] font-black px-2 py-1 rounded-md flex items-center gap-1.5 border border-spotify-green/20"
+          >
+            {tag}
+            <button 
+              type="button" 
+              onClick={() => removeTag(tag)}
+              className="hover:text-white transition-colors"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
+        <input 
+          type="text" 
+          value={inputValue}
+          onChange={e => setInputValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={value.length === 0 ? placeholder : ""}
+          className="bg-transparent border-none outline-none text-sm font-medium text-white flex-1 min-w-[80px]"
+        />
+      </div>
     </div>
   );
 }
