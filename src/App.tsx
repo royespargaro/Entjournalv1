@@ -29,7 +29,12 @@ import {
   Target,
   TrendingUp,
   TrendingDown,
-  Brain
+  Brain,
+  Shield,
+  Clock,
+  ArrowRightCircle,
+  Play,
+  Share2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -88,7 +93,7 @@ interface Trade {
   time: string;
   pair: string;
   dir: 'Long' | 'Short';
-  session: 'Asia' | 'London' | 'New York';
+  session: string;
   entry: number;
   exit: number;
   sl: number;
@@ -108,6 +113,25 @@ interface Trade {
   tags?: string[];
   createdAt: any;
   userId: string;
+}
+
+interface DailySetup {
+  id: string;
+  pair: string;
+  dir: 'Long' | 'Short';
+  entry: number;
+  sl: number;
+  tp: number;
+  notes: string;
+  status: 'planned' | 'active';
+  session?: string;
+  createdAt: any;
+  userId: string;
+}
+
+interface DailyGoals {
+  goals: string;
+  updatedAt: any;
 }
 
 const PAIR_CONFIG: Record<string, { multiplier: number, digits: number, pipSize: number }> = {
@@ -138,6 +162,24 @@ const CURRENCIES = {
   SAR: { symbol: 'SR', code: 'SAR', rate: 3.75 },
   AED: { symbol: 'DH', code: 'AED', rate: 3.67 },
 };
+
+const SESSIONS = [
+  { name: 'Sydney', start: 21, end: 6, color: 'bg-blue-500/20 text-blue-500 border-blue-500/30' },
+  { name: 'Tokyo', start: 0, end: 9, color: 'bg-purple-500/20 text-purple-500 border-purple-500/30' },
+  { name: 'London', start: 7, end: 16, color: 'bg-orange-500/20 text-orange-500 border-orange-500/30' },
+  { name: 'New York', start: 12, end: 21, color: 'bg-spotify-green/20 text-spotify-green border-spotify-green/30' }
+];
+
+function getCurrentSessions(): string[] {
+  const utcHour = new Date().getUTCHours();
+  return SESSIONS.filter(s => {
+    if (s.start < s.end) {
+      return utcHour >= s.start && utcHour < s.end;
+    } else {
+      return utcHour >= s.start || utcHour < s.end;
+    }
+  }).map(s => s.name);
+}
 
 const convertCurrency = (amount: number, from: string, to: string) => {
   const fromRate = CURRENCIES[from as keyof typeof CURRENCIES]?.rate || 1;
@@ -228,9 +270,9 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 const BottomNav = ({ activePage, setActivePage, openMore }: any) => {
   const navItems = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
-    { id: 'history', label: 'History', icon: History },
+    { id: 'daily-plan', label: 'War Room', icon: Target },
     { id: 'log', label: 'Log', icon: PlusCircle, isCenter: true },
-    { id: 'calculator', label: 'Tools', icon: Zap },
+    { id: 'history', label: 'History', icon: History },
     { id: 'more', label: 'Menu', icon: MoreHorizontal, isAction: true },
   ];
 
@@ -285,13 +327,12 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, openRules, logout, user, dis
   if (!isOpen) return null;
 
   const menuItems = [
-    { id: 'history', label: 'Trade History', icon: History },
+    { id: 'calculator', label: 'FX & Fib Calc', icon: Zap },
     { id: 'analytics', label: 'Full Analytics', icon: BarChart3 },
     { id: 'habits', label: 'Trader Habits', icon: Brain },
     { id: 'review', label: 'Weekly Review', icon: BookOpen },
     { id: 'plan', label: 'Trading Plan', icon: Target },
     { id: 'import', label: 'Import MT5', icon: Download },
-    { id: 'calculator', label: 'FX & Fib Calc', icon: Zap },
   ];
 
   return (
@@ -469,7 +510,7 @@ const formatCurrency = (val: any, currency: string = 'USD') => {
 
 const cleanMoney = (val: any): number => {
   if (val === undefined || val === null || val === '') return 0;
-  if (typeof val === 'number') return val;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
   
   let s = String(val).trim();
   
@@ -696,6 +737,8 @@ function JournalApp() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [tradingPlan, setTradingPlan] = useState<TradingPlan | null>(null);
+  const [dailySetups, setDailySetups] = useState<DailySetup[]>([]);
+  const [dailyGoals, setDailyGoals] = useState<string>('');
   const [activePage, setActivePage] = useState('dashboard');
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
@@ -758,10 +801,34 @@ function JournalApp() {
       }
     });
 
+    const dailySetupsPath = `users/${user.uid}/dailySetups`;
+    const qDaily = query(collection(db, dailySetupsPath), orderBy('createdAt', 'desc'));
+    const unsubscribeDaily = onSnapshot(qDaily, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as DailySetup));
+      setDailySetups(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, dailySetupsPath);
+    });
+
+    const dailyGoalsPath = `users/${user.uid}/settings/dailyGoals`;
+    const unsubscribeGoals = onSnapshot(doc(db, dailyGoalsPath), (snapshot) => {
+      if (snapshot.exists()) {
+        setDailyGoals(snapshot.data()?.goals || '');
+      } else {
+        setDailyGoals('');
+      }
+    }, (error) => {
+      if (error.code !== 'permission-denied' && error.code !== 'not-found') {
+        console.error("Goals sync error:", error);
+      }
+    });
+
     return () => {
       unsubscribeTrades();
       unsubscribeReviews();
       unsubscribePlan();
+      unsubscribeDaily();
+      unsubscribeGoals();
     };
   }, [user]);
 
@@ -1026,6 +1093,77 @@ function JournalApp() {
     }
   };
 
+  const saveDailyGoals = async (goals: string) => {
+    if (!user) return;
+    const path = `users/${user.uid}/settings/dailyGoals`;
+    try {
+      await setDoc(doc(db, path), {
+        goals,
+        updatedAt: serverTimestamp()
+      });
+      showToast('Daily intentions set');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  };
+
+  const addDailySetup = async (setupData: any) => {
+    if (!user) return;
+    const path = `users/${user.uid}/dailySetups`;
+    try {
+      await addDoc(collection(db, path), {
+        ...setupData,
+        status: 'planned',
+        userId: user.uid,
+        createdAt: serverTimestamp()
+      });
+      showToast('War room setup added');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  };
+
+  const updateDailySetup = async (id: string, setupData: any) => {
+    if (!user) return;
+    const path = `users/${user.uid}/dailySetups/${id}`;
+    try {
+      await updateDoc(doc(db, path), {
+        ...setupData,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  };
+
+  const deleteDailySetup = async (id: string) => {
+    if (!user) return;
+    const path = `users/${user.uid}/dailySetups/${id}`;
+    try {
+      await deleteDoc(doc(db, path));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  };
+
+  const toggleExecuteSetup = async (id: string, currentStatus: string) => {
+    if (!user) return;
+    const path = `users/${user.uid}/dailySetups/${id}`;
+    const newStatus = currentStatus === 'planned' ? 'active' : 'planned';
+    
+    const updates: any = { status: newStatus };
+    if (newStatus === 'active') {
+      updates.session = getCurrentSessions().join(' / ');
+    }
+
+    try {
+      await updateDoc(doc(db, path), updates);
+      showToast(newStatus === 'active' ? 'Position marked as ACTIVE ⚡' : 'Back to planning');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  };
+
   const deleteTrade = async (id: string) => {
     if (!user) return;
     if (window.confirm('Delete this trade?')) {
@@ -1138,6 +1276,28 @@ function JournalApp() {
     }
   };
 
+  const handleShareTrade = async (t: Trade) => {
+    const pnlFormatted = formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency);
+    const text = `📊 Trade Detail: ${t.result.toUpperCase()}\nAsset: ${t.pair} (${t.dir})\nP&L: ${t.pnl >= 0 ? '+' : ''}${pnlFormatted}\nDate: ${t.date}\nSetup: ${t.setup}\n#Forex #Trading #ENTJJournal`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Trade Analysis ${t.pair}`,
+          text: text,
+          url: window.location.href
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          showToast('Sharing failed', 'error');
+        }
+      }
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied to clipboard! 📋');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-spotify-black text-white font-sans selection:bg-spotify-green selection:text-spotify-darker">
       <main className="flex-1 min-h-screen pb-32 relative overflow-x-hidden w-full">
@@ -1170,7 +1330,15 @@ function JournalApp() {
             className="p-4 md:p-8 max-w-7xl mx-auto"
           >
             {activePage === 'dashboard' && (
-              <DashboardPage stats={stats} trades={trades} onTradeClick={setSelectedTrade} displayCurrency={displayCurrency} setActivePage={setActivePage} plan={tradingPlan} />
+              <DashboardPage 
+                stats={stats} 
+                trades={trades} 
+                onTradeClick={setSelectedTrade} 
+                displayCurrency={displayCurrency} 
+                setActivePage={setActivePage} 
+                plan={tradingPlan} 
+                dailyGoals={dailyGoals}
+              />
             )}
             {activePage === 'log' && (
               <LogPage onLog={addTrade} displayCurrency={displayCurrency} />
@@ -1207,6 +1375,19 @@ function JournalApp() {
             )}
             {activePage === 'review' && (
               <ReviewPage reviews={reviews} onDeleteReview={deleteReview} />
+            )}
+            {activePage === 'daily-plan' && (
+              <DailyPlanPage 
+                goals={dailyGoals} 
+                setups={dailySetups} 
+                onSaveGoals={saveDailyGoals} 
+                onAddSetup={addDailySetup} 
+                onUpdateSetup={updateDailySetup} 
+                onDeleteSetup={deleteDailySetup} 
+                onToggleExecute={toggleExecuteSetup}
+                onLogTrade={addTrade}
+                displayCurrency={displayCurrency}
+              />
             )}
             {activePage === 'plan' && (
               <PlanPage plan={tradingPlan} trades={trades} displayCurrency={displayCurrency} onSave={saveTradingPlan} onReset={deletePlan} />
@@ -1305,14 +1486,23 @@ function JournalApp() {
                     </div>
                     <h4 className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-spotify-green">Gemini AI Audit</h4>
                   </div>
-                  {!aiAnalysis && !isAnalyzing && (
+                  <div className="flex items-center gap-3">
                     <button 
-                      onClick={() => analyzeTrade(selectedTrade)}
-                      className="text-[10px] font-bold text-spotify-green border border-spotify-green/30 px-3 py-1 rounded-full hover:bg-spotify-green hover:text-spotify-darker transition-all"
+                      onClick={() => handleShareTrade(selectedTrade)}
+                      className="p-2 text-spotify-muted hover:text-spotify-green transition-all"
+                      title="Share Result"
                     >
-                      Run Analysis
+                      <Share2 size={16} />
                     </button>
-                  )}
+                    {!aiAnalysis && !isAnalyzing && (
+                      <button 
+                        onClick={() => analyzeTrade(selectedTrade)}
+                        className="text-[10px] font-bold text-spotify-green border border-spotify-green/30 px-3 py-1 rounded-full hover:bg-spotify-green hover:text-spotify-darker transition-all"
+                      >
+                        Run Analysis
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {isAnalyzing && (
@@ -1387,9 +1577,31 @@ function JournalApp() {
 
 // --- Page Components ---
 
-function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActivePage, plan }: { stats: any, trades: any, onTradeClick: any, displayCurrency: any, setActivePage: any, plan: any }) {
-  const { user } = useAuth();
+function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActivePage, plan, dailyGoals }: { stats: any, trades: any, onTradeClick: any, displayCurrency: any, setActivePage: any, plan: any, dailyGoals?: string }) {
+  const { user, showToast } = useAuth();
   const firstName = user?.displayName?.split(' ')[0] || 'Trader';
+
+  const handleShareTrade = async (t: Trade) => {
+    const pnlFormatted = formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency);
+    const text = `📊 Latest Trade: ${t.result === 'win' ? 'SUCCESS ✅' : t.result === 'loss' ? 'LEARNING 📉' : 'BE'}\nAsset: ${t.pair} (${t.dir})\nP&L: ${t.pnl >= 0 ? '+' : ''}${pnlFormatted}\n#Trading #Forex #ENTJJournal`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Trade Report ${t.pair}`,
+          text: text,
+          url: window.location.href
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          showToast('Sharing failed', 'error');
+        }
+      }
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied to clipboard! 📋');
+    }
+  };
 
   // Calculate monthly stats for plan progress
   const currentMonth = new Date().getMonth();
@@ -1524,6 +1736,44 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
           </div>
         </div>
       </div>
+      
+      <AnimatePresence>
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          onClick={() => setActivePage('daily-plan')}
+          className={`relative overflow-hidden p-6 rounded-[2rem] flex flex-col md:flex-row md:items-center justify-between gap-6 group cursor-pointer transition-all border ${
+            dailyGoals ? 'bg-spotify-green/10 border-spotify-green/20 shadow-lg shadow-spotify-green/5' : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.04]'
+          }`}
+        >
+          {dailyGoals && (
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+              <Sparkles size={80} className="text-spotify-green" />
+            </div>
+          )}
+          
+          <div className="flex items-center gap-5 relative z-10">
+             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
+               dailyGoals ? 'bg-spotify-green/20 text-spotify-green' : 'bg-white/10 text-white/40 group-hover:text-spotify-green group-hover:bg-spotify-green/10'
+             }`}>
+               <Target size={24} />
+             </div>
+             <div>
+                <p className={`text-[10px] font-black uppercase tracking-[0.3em] mb-1 ${dailyGoals ? 'text-spotify-green' : 'text-spotify-muted'}`}>
+                  {dailyGoals ? "Today's Prime Directive" : "Daily War Room"}
+                </p>
+                <p className={`text-sm md:text-base font-bold italic tracking-tight leading-relaxed ${dailyGoals ? 'text-white' : 'text-white/40'}`}>
+                  {dailyGoals ? `"${dailyGoals}"` : "Analyze the charts. Set your intention. Draft your strategy."}
+                </p>
+             </div>
+          </div>
+          
+          <div className="flex items-center gap-3 bg-white/5 border border-white/10 px-6 py-3 rounded-full text-[10px] font-black text-white uppercase tracking-widest group-hover:bg-spotify-green group-hover:text-black group-hover:border-spotify-green transition-all relative z-10 self-start md:self-center">
+             <span>{dailyGoals ? 'Command Center' : 'Initialize Session'}</span>
+             <ChevronRight size={14} className="group-hover:translate-x-1 transition-transform" />
+          </div>
+        </motion.div>
+      </AnimatePresence>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white/[0.02] rounded-3xl p-6 md:p-10 border border-white/5">
@@ -1744,8 +1994,19 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
                     <p className="text-[11px] font-black text-white">{t.pair}</p>
                     <p className={`text-[8px] font-bold uppercase tracking-widest mt-0.5 ${t.dir === 'Long' ? 'text-spotify-green' : 'text-red-500'}`}>{t.dir}</p>
                   </td>
-                  <td className={`px-8 py-5 text-[11px] font-black text-right font-mono ${t.pnl >= 0 ? 'text-spotify-green' : 'text-red-500'}`}>
-                    {t.pnl >= 0 ? '+' : ''}{formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency)}
+                  <td className="px-8 py-5 text-[11px] font-black text-right font-mono">
+                    <div className="flex items-center justify-end gap-3">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleShareTrade(t); }}
+                        className="opacity-0 group-hover:opacity-100 p-2 text-spotify-muted hover:text-spotify-green transition-all"
+                        title="Share Result"
+                      >
+                        <Share2 size={12} />
+                      </button>
+                      <span className={t.pnl >= 0 ? 'text-spotify-green' : 'text-red-500'}>
+                        {t.pnl >= 0 ? '+' : ''}{formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency)}
+                      </span>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1831,6 +2092,435 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
         </div>
       </div>
     </div>
+  );
+}
+
+function DailyPlanPage({ goals, setups, onSaveGoals, onAddSetup, onUpdateSetup, onDeleteSetup, onToggleExecute, onLogTrade, displayCurrency }: any) {
+  const [isAddingSetup, setIsAddingSetup] = useState(false);
+  const [closingSetup, setClosingSetup] = useState<DailySetup | null>(null);
+  const [localGoals, setLocalGoals] = useState(goals);
+  const [isEditingGoals, setIsEditingGoals] = useState(false);
+
+  useEffect(() => {
+    setLocalGoals(goals);
+  }, [goals]);
+
+  const handleSaveGoals = () => {
+    onSaveGoals(localGoals);
+    setIsEditingGoals(false);
+  };
+
+  return (
+    <div className="space-y-10 animate-in fade-in duration-700">
+      {/* Header & Daily Intentions */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-4xl font-black tracking-tighter text-white">Daily <span className="text-spotify-green italic">War Room</span></h1>
+            <p className="text-xs font-bold text-spotify-muted uppercase tracking-[0.2em] mt-1">Plan your battle. Execute your edge.</p>
+          </div>
+          <div className="bg-white/5 border border-white/10 px-4 py-2 rounded-full hidden md:flex items-center gap-3">
+             <div className="w-2 h-2 rounded-full bg-spotify-green animate-pulse" />
+             <span className="text-[10px] font-black text-white uppercase tracking-widest">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+          </div>
+        </div>
+
+        <div className="bg-spotify-card border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-8 opacity-0 group-hover:opacity-10 transition-opacity">
+            <Target size={120} className="text-spotify-green" />
+          </div>
+          <div className="relative z-10 space-y-4">
+            <div className="flex items-center justify-between">
+               <div className="flex items-center gap-2">
+                 <Zap size={14} className="text-spotify-green" />
+                 <h3 className="text-[10px] font-black uppercase text-spotify-green tracking-[0.3em]">Daily Intentions / Goals</h3>
+               </div>
+               {!isEditingGoals ? (
+                 <button onClick={() => setIsEditingGoals(true)} className="text-white/40 hover:text-white transition-colors">
+                   <Edit2 size={16} />
+                 </button>
+               ) : (
+                 <button onClick={handleSaveGoals} className="text-spotify-green hover:text-spotify-green-hover transition-colors font-black text-[10px] uppercase tracking-widest">
+                   Save Plan
+                 </button>
+               )}
+            </div>
+            {isEditingGoals ? (
+              <textarea 
+                value={localGoals}
+                onChange={(e) => setLocalGoals(e.target.value)}
+                autoFocus
+                className="w-full bg-white/5 border-l border-white/20 px-4 py-2 text-sm text-white/80 outline-none focus:border-spotify-green transition-all min-h-[80px] font-medium"
+                placeholder="What is your focus today? (e.g. Risk max 1% per trade, ignore B-setups...)"
+              />
+            ) : (
+              <p className="text-sm text-white/60 font-medium italic leading-relaxed max-w-2xl">
+                {goals || "Empty mind, empty account. Define your focus for this session..."}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Setups Section */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-black text-white tracking-tight">Planned Setups</h2>
+            <span className="bg-white/10 text-white text-[10px] font-black px-2 py-0.5 rounded-md">{setups.length}</span>
+          </div>
+          <button 
+            onClick={() => setIsAddingSetup(true)}
+            className="flex items-center gap-2 bg-white text-black px-5 py-2.5 rounded-full font-black text-[10px] uppercase tracking-widest hover:scale-105 transition-all shadow-xl shadow-white/5"
+          >
+            <PlusCircle size={14} />
+            Initialize Setup
+          </button>
+        </div>
+
+        {setups.length === 0 ? (
+          <div className="py-20 border-2 border-dashed border-white/5 rounded-[2.5rem] flex flex-col items-center justify-center text-center">
+            <Shield size={40} className="text-white/10 mb-4" />
+            <p className="text-sm font-bold text-spotify-muted">No battle strategy yet.</p>
+            <p className="text-[10px] text-white/20 uppercase tracking-[0.2em] mt-1">Map out your entries before the market moves.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {setups.map((setup: DailySetup) => (
+              <SetupCard 
+                key={setup.id} 
+                setup={setup} 
+                onDelete={() => onDeleteSetup(setup.id)}
+                onExecute={() => onToggleExecute(setup.id, setup.status)}
+                onClose={() => setClosingSetup(setup)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Modals */}
+      <AnimatePresence>
+        {isAddingSetup && (
+          <Modal onClose={() => setIsAddingSetup(false)} title="Initialize New Setup">
+            <SetupForm onSave={(data: any) => { onAddSetup(data); setIsAddingSetup(false); }} />
+          </Modal>
+        )}
+        {closingSetup && (
+          <Modal onClose={() => setClosingSetup(null)} title="Finalize Trade Conclusion">
+            <CloseTradeFinalizer 
+              setup={closingSetup} 
+              onLog={async (logData: any) => {
+                await onLogTrade(logData);
+                await onDeleteSetup(closingSetup.id);
+                setClosingSetup(null);
+              }} 
+              displayCurrency={displayCurrency}
+            />
+          </Modal>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function SetupCard({ setup, onDelete, onExecute, onClose }: { setup: DailySetup, onDelete: () => void, onExecute: () => void, onClose: () => void }) {
+  const isActive = setup.status === 'active';
+  const { showToast } = useAuth();
+
+  const handleShare = async () => {
+    const text = `🎯 Trade Setup: ${setup.pair} (${setup.dir})\nEntry: ${setup.entry}\nSL: ${setup.sl}\nTP: ${setup.tp}\nStatus: ${isActive ? 'Active' : 'Planned'}\n#TradingJournal #Forex`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Trade Setup ${setup.pair}`,
+          text: text,
+          url: window.location.href
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          showToast('Sharing failed', 'error');
+        }
+      }
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied to clipboard! 📋');
+    }
+  };
+
+  return (
+    <motion.div 
+      layout
+      layoutId={setup.id}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className={`relative group bg-spotify-card border ${isActive ? 'border-spotify-green shadow-[0_0_40px_rgba(29,185,84,0.1)]' : 'border-white/5'} p-7 rounded-[2.5rem] transition-all overflow-hidden`}
+    >
+      {/* Dynamic Background Effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 -mr-16 -mt-16 rounded-full blur-[60px] opacity-20 transition-all duration-500 ${isActive ? 'bg-spotify-green' : setup.dir === 'Long' ? 'bg-spotify-green/50' : 'bg-red-500/50'}`} />
+
+      {isActive && (
+        <div className="absolute top-6 right-8 flex items-center gap-2">
+          <span className="flex h-2 w-2 relative">
+             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-spotify-green opacity-75"></span>
+             <span className="relative inline-flex rounded-full h-2 w-2 bg-spotify-green"></span>
+          </span>
+          <span className="text-[9px] font-black text-spotify-green uppercase tracking-widest">Live Trade</span>
+        </div>
+      )}
+
+      <div className="relative z-10 space-y-7">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-transform group-hover:scale-110 duration-300 ${setup.dir === 'Long' ? 'bg-spotify-green/10 text-spotify-green shadow-spotify-green/5' : 'bg-red-500/10 text-red-500 shadow-red-500/5'}`}>
+               {setup.dir === 'Long' ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
+             </div>
+             <div>
+               <div className="flex items-center gap-2">
+                 <p className="text-sm font-black text-white tracking-tight">{setup.pair}</p>
+                 <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-sm uppercase tracking-[0.1em] ${setup.dir === 'Long' ? 'bg-spotify-green/20 text-spotify-green' : 'bg-red-500/20 text-red-500'}`}>
+                   {setup.dir}
+                 </span>
+               </div>
+               <div className="flex items-center gap-1.5 mt-0.5">
+                 <p className="text-[9px] font-bold text-white/30 uppercase tracking-[0.2em] flex items-center gap-1">
+                   {isActive ? <Play size={8} fill="currentColor" className="text-spotify-green" /> : <Clock size={8} />} 
+                   {isActive ? 'Active Edge' : 'Planned Strategy'}
+                 </p>
+                 {setup.session && (
+                   <div className="flex gap-1">
+                     {setup.session.split(' / ').map(s => {
+                       const config = SESSIONS.find(sess => sess.name === s);
+                       return (
+                         <span key={s} className={`text-[7px] font-black px-1.5 py-0.5 rounded-full border ${config?.color || 'bg-white/10 text-white/40 border-white/10'} uppercase tracking-widest`}>
+                           {s}
+                         </span>
+                       );
+                     })}
+                   </div>
+                 )}
+               </div>
+             </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={(e) => { e.stopPropagation(); handleShare(); }}
+              className="p-2 text-white/5 hover:text-spotify-green hover:bg-spotify-green/10 rounded-xl transition-all"
+              title="Share Setup"
+            >
+              <Share2 size={14} />
+            </button>
+            {!isActive && (
+              <button 
+                onClick={(e) => { e.stopPropagation(); onDelete(); }} 
+                className="p-2 text-white/5 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
+                title="Delete Setup"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-6 relative">
+           <div className="absolute top-1/2 left-[33%] w-px h-6 bg-white/5 -translate-y-1/2 hidden md:block" />
+           <div className="absolute top-1/2 left-[66%] w-px h-6 bg-white/5 -translate-y-1/2 hidden md:block" />
+           
+           <div className="space-y-1">
+             <p className="text-[8px] font-black text-spotify-muted uppercase tracking-[0.2em] flex items-center gap-1">
+               <ArrowRightCircle size={10} className="text-white/20" /> Entry
+             </p>
+             <p className="text-[13px] font-mono font-black text-white">{setup.entry}</p>
+           </div>
+           <div className="space-y-1">
+             <p className="text-[8px] font-black text-spotify-muted uppercase tracking-[0.2em] flex items-center gap-1">
+               <Shield size={10} className="text-red-500/40" /> Stop
+             </p>
+             <p className="text-[13px] font-mono font-black text-red-500/90">{setup.sl}</p>
+           </div>
+           <div className="space-y-1">
+             <p className="text-[8px] font-black text-spotify-muted uppercase tracking-[0.2em] flex items-center gap-1">
+               <Target size={10} className="text-spotify-green/40" /> Target
+             </p>
+             <p className="text-[13px] font-mono font-black text-spotify-green/90">{setup.tp}</p>
+           </div>
+        </div>
+
+        {setup.notes && (
+          <div className="p-4 bg-white/[0.02] rounded-2xl border border-white/5 group-hover:bg-white/[0.04] transition-colors">
+            <h4 className="text-[8px] font-black text-white/20 uppercase tracking-[0.2em] mb-2">Analysis Notes</h4>
+            <p className="text-[10px] text-white/50 leading-relaxed font-medium italic">{setup.notes}</p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+           {isActive ? (
+             <button 
+               onClick={onClose}
+               className="flex-1 bg-white text-black py-4 rounded-[1.25rem] font-black text-[10px] uppercase tracking-widest hover:bg-spotify-green hover:text-black transition-all shadow-xl shadow-white/5 flex items-center justify-center gap-2"
+             >
+               <CheckCircle2 size={14} />
+               Finalize Close
+             </button>
+           ) : (
+             <button 
+               onClick={onExecute}
+               className="flex-1 bg-spotify-green text-black py-4 rounded-[1.25rem] font-black text-[10px] uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-spotify-green/20 flex items-center justify-center gap-2"
+             >
+               <Play size={14} fill="currentColor" />
+               Execute Plan
+             </button>
+           )}
+           {isActive && (
+             <button 
+               onClick={onExecute}
+               className="p-4 bg-white/5 border border-white/10 rounded-[1.25rem] text-white/20 hover:text-white hover:bg-white/10 transition-all"
+               title="Move back to planned"
+             >
+               <RotateCcw size={16} />
+             </button>
+           )}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function SetupForm({ onSave }: { onSave: (data: any) => void }) {
+  const [form, setForm] = useState({
+    pair: 'XAUUSD',
+    dir: 'Long',
+    entry: '',
+    sl: '',
+    tp: '',
+    notes: '',
+    session: getCurrentSessions().join(' / ')
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave({
+      ...form,
+      entry: parseFloat(form.entry),
+      sl: parseFloat(form.sl),
+      tp: parseFloat(form.tp)
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="grid grid-cols-2 gap-4 text-left">
+        <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm(prev => ({ ...prev, pair: v }))} />
+        <Select label="Direction" value={form.dir} options={['Long', 'Short']} onChange={(v:any) => setForm(prev => ({ ...prev, dir: v as any }))} />
+        <div className="col-span-2">
+          <Input label="Session" value={form.session} onChange={(v:any) => setForm(prev => ({ ...prev, session: v }))} placeholder="Auto-detected or custom..." />
+        </div>
+        <Input label="Entry Level" type="number" step="0.00001" value={form.entry} onChange={(v:any) => setForm(prev => ({ ...prev, entry: v }))} />
+        <Input label="Stop Loss" type="number" step="0.00001" value={form.sl} onChange={(v:any) => setForm(prev => ({ ...prev, sl: v }))} />
+        <div className="col-span-2">
+          <Input label="Take Profit Target" type="number" step="0.00001" value={form.tp} onChange={(v:any) => setForm(prev => ({ ...prev, tp: v }))} />
+        </div>
+        <div className="col-span-2">
+           <TextArea label="War Room Notes" value={form.notes} onChange={(v:any) => setForm(prev => ({ ...prev, notes: v }))} placeholder="Setup confluences, timeframe, HTF bias..." />
+        </div>
+      </div>
+      <button type="submit" className="w-full bg-spotify-green text-black py-4 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-spotify-green/10 active:scale-95 transition-all flex items-center justify-center gap-2">
+        <Zap size={14} fill="currentColor" />
+        Lock Strategy
+      </button>
+    </form>
+  );
+}
+
+function CloseTradeFinalizer({ setup, onLog, displayCurrency }: { setup: DailySetup, onLog: (data: any) => void, displayCurrency: string }) {
+  const [form, setForm] = useState({
+    exit: '',
+    lot: '0.10',
+    pnl: '',
+    result: 'win',
+    notes: '',
+    emotion: 'Calm / Confident',
+    plan: 'yes',
+    news: 'no',
+    session: setup.session || getCurrentSessions().join(' / ')
+  });
+
+  // Auto-calc P&L
+  useEffect(() => {
+    const entry = setup.entry;
+    const exit = parseFloat(form.exit);
+    const lot = parseFloat(form.lot);
+    if (!isNaN(exit) && !isNaN(lot)) {
+      const config = PAIR_CONFIG[setup.pair] || { multiplier: 1 };
+      const diff = setup.dir === 'Long' ? (exit - entry) : (entry - exit);
+      const calculatedPnlInUsd = diff * lot * config.multiplier;
+      const finalPnl = convertCurrency(calculatedPnlInUsd, 'USD', displayCurrency);
+      
+      const formattedPnl = displayCurrency === 'IDR' ? Math.round(finalPnl).toString() : finalPnl.toFixed(2);
+      
+      setForm(prev => ({ 
+        ...prev, 
+        pnl: formattedPnl,
+        result: calculatedPnlInUsd > 0 ? 'win' : calculatedPnlInUsd < 0 ? 'loss' : 'be'
+      }));
+    }
+  }, [form.exit, form.lot, setup, displayCurrency]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const logData = {
+      pair: setup.pair,
+      dir: setup.dir,
+      entry: cleanMoney(setup.entry),
+      sl: cleanMoney(setup.sl),
+      tp: cleanMoney(setup.tp),
+      exit: cleanMoney(form.exit),
+      lot: cleanMoney(form.lot),
+      pnl: cleanMoney(form.pnl),
+      result: form.result,
+      notes: form.notes,
+      emotion: form.emotion,
+      plan: form.plan,
+      news: form.news,
+      date: new Date().toISOString().split('T')[0],
+      time: new Date().toTimeString().slice(0, 5),
+      session: form.session, 
+      currency: displayCurrency,
+      setup: 'Planned Strategy',
+      reason: setup.notes,
+      dur: '',
+      tags: []
+    };
+    await onLog(logData);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6 text-left">
+      <div className="grid grid-cols-2 gap-4">
+         <div className="col-span-2 p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between">
+            <div>
+              <p className="text-[9px] font-black text-spotify-muted uppercase tracking-widest mb-1">Closing Position</p>
+              <p className="text-xl font-black text-white">{setup.pair} <span className={setup.dir === 'Long' ? 'text-spotify-green' : 'text-red-500'}>{setup.dir}</span></p>
+            </div>
+            <div className="text-right">
+              <p className="text-[9px] font-black text-spotify-muted uppercase tracking-widest mb-1">Entry Price</p>
+              <p className="text-lg font-mono font-bold text-white">{setup.entry}</p>
+            </div>
+         </div>
+         <div className="col-span-2">
+            <Input label="Session" value={form.session} onChange={(v:any) => setForm(prev => ({ ...prev, session: v }))} placeholder="Session at execution..." />
+         </div>
+         <Input label="Actual Exit Price" type="number" step="0.00001" value={form.exit} onChange={(v:any) => setForm(prev => ({ ...prev, exit: v }))} />
+         <Input label="Lot Size" type="number" step="0.01" value={form.lot} onChange={(v:any) => setForm(prev => ({ ...prev, lot: v }))} />
+         <Select label="Outcome" value={form.result} options={[{ label: 'Win ✅', value: 'win' }, { label: 'Loss ❌', value: 'loss' }, { label: 'Breakeven', value: 'be' }]} onChange={(v:any) => setForm(prev => ({ ...prev, result: v as any }))} />
+         <Input label={`P&L (${CURRENCIES[displayCurrency as keyof typeof CURRENCIES]?.symbol})`} type="number" step="0.01" value={form.pnl} onChange={(v:any) => setForm(prev => ({ ...prev, pnl: v }))} />
+      </div>
+      <TextArea label="Final Conclusions" value={form.notes} onChange={(v:any) => setForm(prev => ({ ...prev, notes: v }))} placeholder="Emotional control? Mistake? Wisdom gained..." />
+      <button type="submit" className="w-full bg-spotify-green text-black py-4 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-spotify-green/10 active:scale-95 transition-all">
+        Archive to History
+      </button>
+    </form>
   );
 }
 
@@ -2171,6 +2861,8 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAutoLot, setIsAutoLot] = useState(!initialData);
+  const [step, setStep] = useState(1);
+  
   const defaults = {
     date: new Date().toISOString().split('T')[0],
     time: new Date().toTimeString().slice(0, 5),
@@ -2199,15 +2891,12 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
   };
 
   const [form, setForm] = useState(() => {
-    // Check for draft if this is a new trade
     if (!initialData) {
       const savedDraft = localStorage.getItem('trade_draft');
       if (savedDraft) {
         try {
           const draft = JSON.parse(savedDraft);
-          // If draft exists, ensure it uses current display currency if it was saved with one
           if (displayCurrency) draft.currency = displayCurrency;
-          // Ensure tags is array
           if (typeof draft.tags === 'string') {
             draft.tags = draft.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
           }
@@ -2225,7 +2914,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
       data.tags = [];
     }
     
-    // Always honor the current display currency even when editing
     if (displayCurrency) {
       data.currency = displayCurrency;
     }
@@ -2233,14 +2921,12 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     return data;
   });
 
-  // Auto-save draft to localStorage
   useEffect(() => {
     if (!initialData && form !== defaults) {
       localStorage.setItem('trade_draft', JSON.stringify(form));
     }
   }, [form, initialData]);
 
-  // Update form if initialData changes (e.g. switching trades while open)
   useEffect(() => {
     if (initialData) {
       const data = { ...initialData };
@@ -2249,7 +2935,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
       } else {
         data.tags = [];
       }
-      // If we are editing, we want to maintain the Global display currency preference
       if (displayCurrency) {
         data.currency = displayCurrency;
       }
@@ -2257,7 +2942,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     }
   }, [initialData, displayCurrency]);
 
-  // Auto-calculate Session
   useEffect(() => {
     if (form.time) {
       const hour = parseInt(form.time.split(':')[0]);
@@ -2272,7 +2956,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     }
   }, [form.time]);
 
-  // Risk Guardian Calculation
   const riskCalculation = useMemo(() => {
     const entry = parseFloat(form.entry);
     const sl = parseFloat(form.sl);
@@ -2287,11 +2970,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     const config = PAIR_CONFIG[pair] || { multiplier: 1, digits: 2 };
     const pips = Math.abs(entry - sl) * config.multiplier;
     const amountToRisk = balance * (riskPercent / 100);
-    
-    // lot = riskAmount / (pips * valuePerPip)
-    // In our simplified model, 1 lot = multiplier USD per "unit" move. 
-    // This is a rough estimation for XAUUSD where 0.1 lot = $1 per 0.1 move ($10 per $1 move)
-    // multiplier is 100 for gold usually in these journals
     const recommendedLot = amountToRisk / (Math.abs(entry - sl) * config.multiplier);
 
     return {
@@ -2301,7 +2979,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     };
   }, [form.entry, form.sl, form.balance, form.riskPercent, form.pair]);
 
-  // Handle auto-lot calculation
   useEffect(() => {
     if (isAutoLot && riskCalculation) {
       setForm(prev => {
@@ -2314,7 +2991,6 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
   }, [riskCalculation, isAutoLot]);
 
   useEffect(() => {
-    // Only auto-calculate if we have valid numbers for the math
     const entry = parseFloat(form.entry);
     const exit = parseFloat(form.exit);
     const lot = parseFloat(form.lot);
@@ -2326,11 +3002,9 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
       const diff = form.dir === 'Long' ? (exit - entry) : (entry - exit);
       calculatedPnlInUsd = diff * lot * config.multiplier;
 
-      // Convert from USD to the selected form currency
       const finalPnl = convertCurrency(calculatedPnlInUsd, 'USD', form.currency);
 
       setForm(prev => {
-        // Prevent unnecessary state updates if values are already correct
         const formattedPnl = form.currency === 'IDR' 
           ? Math.round(finalPnl).toString() 
           : formatNum(finalPnl, 2).replace(/,/g, '');
@@ -2400,169 +3074,287 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
     }
   };
 
+  const steps = [
+    { id: 1, label: 'Execution', icon: Zap },
+    { id: 2, label: 'Risk & Details', icon: Shield },
+    { id: 3, label: 'Psychology & Conclusion', icon: Brain }
+  ];
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="bg-spotify-card p-6 rounded-lg space-y-6">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Chart Screenshot</h3>
-          <span className="text-[10px] text-spotify-muted">Visual memory is powerful reference</span>
-        </div>
-        
-        <div 
-          onClick={() => document.getElementById('ss-upload')?.click()}
-          className={`border-2 border-dashed border-white/10 rounded-xl p-8 transition-all group cursor-pointer hover:bg-white/5 hover:border-spotify-green/50 ${form.ss ? 'p-0 overflow-hidden border-solid border-white/5' : ''}`}
-        >
-          {form.ss ? (
-            <div className="relative group">
-              <img src={form.ss} className="w-full max-h-[400px] object-contain bg-black" />
-              <button 
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setForm({ ...form, ss: '' }); }}
-                className="absolute top-4 right-4 bg-black/80 p-2 rounded-full text-white hover:text-red-500 transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center text-center">
-              <Camera size={40} className="text-white/20 mb-4 group-hover:scale-110 transition-transform" />
-              <p className="text-sm font-bold text-spotify-muted mb-1">Drop your TradingView screenshot here</p>
-              <p className="text-[10px] text-white/20 uppercase tracking-widest font-bold">Png, Jpg · Drag & Drop</p>
-            </div>
-          )}
-          <input type="file" id="ss-upload" className="hidden" accept="image/*" onChange={handleFileUpload} />
-        </div>
+    <div className="max-w-4xl mx-auto space-y-8">
+      {/* Progress Stepper */}
+      <div className="flex items-center justify-between px-4">
+        {steps.map((s, idx) => (
+          <React.Fragment key={s.id}>
+            <button 
+              type="button"
+              onClick={() => setStep(s.id)}
+              className="flex flex-col items-center gap-2 group grow"
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${step === s.id ? 'bg-spotify-green text-black scale-110 shadow-[0_0_20px_rgba(29,185,84,0.3)]' : step > s.id ? 'bg-white/20 text-white' : 'bg-white/5 text-white/20 hover:bg-white/10'}`}>
+                <s.icon size={18} />
+              </div>
+              <span className={`text-[9px] font-black uppercase tracking-widest transition-colors ${step === s.id ? 'text-spotify-green' : 'text-spotify-muted'}`}>
+                {s.label}
+              </span>
+            </button>
+            {idx < steps.length - 1 && (
+              <div className={`h-[1px] w-full mx-4 transition-colors ${step > s.id ? 'bg-spotify-green' : 'bg-white/10'}`} />
+            )}
+          </React.Fragment>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-spotify-card p-6 rounded-lg space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Risk Guardian</h3>
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-black uppercase text-spotify-muted">Auto-Size</span>
-              <button 
-                type="button"
-                onClick={() => setIsAutoLot(!isAutoLot)}
-                className={`w-8 h-4 rounded-full relative transition-colors ${isAutoLot ? 'bg-spotify-green' : 'bg-white/10'}`}
-              >
-                <motion.div 
-                  animate={{ x: isAutoLot ? 16 : 2 }}
-                  className="absolute top-1 left-0 w-2 h-2 bg-white rounded-full"
-                />
-              </button>
-              <Zap size={14} className={isAutoLot ? "text-spotify-green animate-pulse" : "text-white/20"} />
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4 text-left">
-            <Input label="Account Balance" type="number" value={form.balance} onChange={(v:any) => setForm(prev => ({ ...prev, balance: v }))} />
-            <Input label="Risk %" type="number" step="0.1" value={form.riskPercent} onChange={(v:any) => setForm(prev => ({ ...prev, riskPercent: v }))} />
-          </div>
+      <form onSubmit={handleSubmit} className="relative min-h-[600px]">
+        {/* Step 1: Execution & Visual */}
+        <AnimatePresence mode="wait">
+          {step === 1 && (
+            <motion.div 
+              key="step1"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-6"
+            >
+              <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                   <div className="space-y-6">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xl font-black text-white tracking-tight">Price Entry</h3>
+                        <div className="px-3 py-1 bg-white/5 rounded-full border border-white/10">
+                          <span className="text-[9px] font-black text-spotify-muted uppercase tracking-widest">Step 01</span>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm(prev => ({ ...prev, pair: v }))} />
+                        <Select label="Direction" value={form.dir} options={['Short', 'Long']} onChange={(v:any) => setForm(prev => ({ ...prev, dir: v as any }))} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Input label="Entry Price" type="number" step="0.00001" placeholder="0.00000" value={form.entry} onChange={(v:any) => setForm(prev => ({ ...prev, entry: v }))} />
+                        <Input label="Stop Loss" type="number" step="0.00001" placeholder="0.00000" value={form.sl} onChange={(v:any) => setForm(prev => ({ ...prev, sl: v }))} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Input label="Exit Price" type="number" step="0.00001" placeholder="0.00000" value={form.exit} onChange={(v:any) => setForm(prev => ({ ...prev, exit: v }))} />
+                        <Input label="Take Profit" type="number" step="0.00001" placeholder="0.00000" value={form.tp} onChange={(v:any) => setForm(prev => ({ ...prev, tp: v }))} />
+                      </div>
+                   </div>
 
-            {riskCalculation ? (
-              <motion.div 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-spotify-green/10 border border-spotify-green/20 rounded-xl p-4 space-y-3"
-              >
-                <div className="flex justify-between items-end">
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-spotify-muted mb-1">Recommended Lot</p>
-                    <p className="text-3xl font-black text-white tracking-tighter">{riskCalculation.lot} <span className="text-sm text-spotify-green">lots</span></p>
-                  </div>
-                  {!isAutoLot && (
-                    <button 
-                      type="button"
-                      onClick={() => { setForm({ ...form, lot: riskCalculation.lot }); setIsAutoLot(true); }}
-                      className="bg-spotify-green text-black text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full hover:scale-105 transition-transform"
+                   <div className="space-y-6">
+                      <h3 className="text-xl font-black text-white tracking-tight">Visual Proof</h3>
+                      <div 
+                        onClick={() => document.getElementById('ss-upload')?.click()}
+                        className={`aspect-video border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center transition-all group cursor-pointer hover:bg-white/5 hover:border-spotify-green/50 relative overflow-hidden ${form.ss ? 'border-solid' : ''}`}
+                      >
+                        {form.ss ? (
+                          <>
+                            <img src={form.ss} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                              <p className="text-xs font-black uppercase text-white bg-black/60 px-4 py-2 rounded-full">Change Image</p>
+                            </div>
+                            <button 
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setForm({ ...form, ss: '' }); }}
+                              className="absolute top-3 right-3 bg-black/80 p-1.5 rounded-full text-white hover:text-red-500 transition-colors"
+                            >
+                              <X size={14} />
+                            </button>
+                          </>
+                        ) : (
+                          <div className="text-center p-4">
+                            <Camera size={32} className="text-white/20 mb-3 mx-auto" />
+                            <p className="text-[10px] font-black uppercase text-spotify-muted tracking-widest leading-relaxed">Drop View Screenshot</p>
+                          </div>
+                        )}
+                        <input type="file" id="ss-upload" className="hidden" accept="image/*" onChange={handleFileUpload} />
+                      </div>
+                   </div>
+                </div>
+              </div>
+              <div className="flex justify-end pt-4">
+                <button type="button" onClick={() => setStep(2)} className="bg-white text-black px-8 py-4 rounded-full font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform">
+                  Configure Risk →
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {step === 2 && (
+            <motion.div 
+              key="step2"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-6"
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-black text-white tracking-tight">Risk Guardian</h3>
+                    <div 
+                      onClick={() => setIsAutoLot(!isAutoLot)}
+                      className={`cursor-pointer px-4 py-1.5 rounded-full border transition-all flex items-center gap-2 ${isAutoLot ? 'bg-spotify-green/10 border-spotify-green text-spotify-green shadow-[0_0_15px_rgba(29,185,84,0.1)]' : 'bg-white/5 border-white/10 text-spotify-muted'}`}
                     >
-                      Apply Size
-                    </button>
+                      <Zap size={14} className={isAutoLot ? 'animate-pulse' : ''} />
+                      <span className="text-[9px] font-black uppercase tracking-widest">Sizer {isAutoLot ? 'ON' : 'OFF'}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <Input label="Account Balance" type="number" value={form.balance} onChange={(v:any) => setForm(prev => ({ ...prev, balance: v }))} />
+                    <Input label="Risk %" type="number" step="0.1" value={form.riskPercent} onChange={(v:any) => setForm(prev => ({ ...prev, riskPercent: v }))} />
+                  </div>
+
+                  {riskCalculation ? (
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-6 space-y-6">
+                       <div className="flex justify-between items-center">
+                          <div>
+                            <p className="text-[9px] font-black text-spotify-muted uppercase tracking-widest mb-1">Recommended</p>
+                            <p className="text-4xl font-black text-white tracking-tighter">{riskCalculation.lot}</p>
+                          </div>
+                          <div className="text-right">
+                             <p className="text-[9px] font-black text-spotify-muted uppercase tracking-widest mb-1">Value At Risk</p>
+                             <p className="text-sm font-black text-spotify-green">${riskCalculation.amount}</p>
+                          </div>
+                       </div>
+                       {!isAutoLot && (
+                         <button 
+                           type="button"
+                           onClick={() => { setForm(prev => ({ ...prev, lot: riskCalculation.lot })); setIsAutoLot(true); }}
+                           className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                         >
+                           Apply Recommended Size
+                         </button>
+                       )}
+                    </div>
+                  ) : (
+                    <div className="p-8 border border-white/5 border-dashed rounded-2xl text-center">
+                       <p className="text-xs text-spotify-muted font-bold opacity-40">Awaiting calculation data...</p>
+                    </div>
                   )}
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4 pt-3 border-t border-white/5">
-                  <div>
-                    <p className="text-[9px] font-bold text-spotify-muted uppercase tracking-widest">Risk Amount</p>
-                    <p className="text-xs font-mono font-bold text-white">${riskCalculation.amount}</p>
+
+                <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-6">
+                  <h3 className="text-xl font-black text-white tracking-tight">Execution Info</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Input label="Date" type="date" value={form.date} onChange={(v:any) => setForm(prev => ({ ...prev, date: v }))} />
+                    <Input label="Time (UTC)" type="time" value={form.time} onChange={(v:any) => setForm(prev => ({ ...prev, time: v }))} />
                   </div>
-                  <div>
-                    <p className="text-[9px] font-bold text-spotify-muted uppercase tracking-widest">SL Distance</p>
-                    <p className="text-xs font-mono font-bold text-white">{riskCalculation.pips} pts</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Input label="Lot Size" type="number" step="0.01" value={form.lot} onChange={(v:any) => { setForm(prev => ({ ...prev, lot: v })); setIsAutoLot(false); }} />
+                    <Select label="Currency" value={form.currency} options={Object.keys(CURRENCIES)} onChange={(v:any) => setForm(prev => ({ ...prev, currency: v as any }))} />
+                  </div>
+                  <div className="pt-2">
+                    <p className="text-[9px] font-black text-spotify-muted uppercase tracking-widest mb-2 px-1">Session Identity</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {['Asia', 'London', 'New York'].map((s) => (
+                        <button 
+                          key={s} 
+                          type="button" 
+                          onClick={() => setForm(prev => ({ ...prev, session: s as any }))}
+                          className={`py-3 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all ${form.session === s ? 'bg-white text-black border-white' : 'bg-white/5 text-spotify-muted border-white/5 hover:bg-white/10'}`}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </motion.div>
-            ) : (
-              <div className="bg-white/5 rounded-xl p-6 text-center border border-white/5">
-                <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest">Enter Entry & SL to see risk</p>
               </div>
-            )}
-          </div>
+              <div className="flex justify-between pt-4">
+                <button type="button" onClick={() => setStep(1)} className="text-spotify-muted px-8 py-4 rounded-full font-black text-xs uppercase tracking-widest hover:text-white transition-all">
+                  ← Previous
+                </button>
+                <button type="button" onClick={() => setStep(3)} className="bg-white text-black px-8 py-4 rounded-full font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform">
+                  Mindset & Results →
+                </button>
+              </div>
+            </motion.div>
+          )}
 
-        <div className="bg-spotify-card p-6 rounded-lg space-y-6">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Trade Details</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="Date" type="date" value={form.date} onChange={(v:any) => setForm(prev => ({ ...prev, date: v }))} />
-            <Input label="Time (UTC)" type="time" value={form.time} onChange={(v:any) => setForm(prev => ({ ...prev, time: v }))} />
-            <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm(prev => ({ ...prev, pair: v }))} />
-            <Select label="Direction" value={form.dir} options={['Short', 'Long']} onChange={(v:any) => setForm(prev => ({ ...prev, dir: v as any }))} />
-            <Input label="Lot Size" type="number" step="0.01" placeholder="0.10" value={form.lot} onChange={(v:any) => { setForm(prev => ({ ...prev, lot: v })); setIsAutoLot(false); }} />
-            <Select label="Currency" value={form.currency} options={Object.keys(CURRENCIES)} onChange={(v:any) => setForm(prev => ({ ...prev, currency: v as any }))} />
-            <Input label="Entry Price" type="number" step="0.01" placeholder="2035.50" value={form.entry} onChange={(v:any) => setForm(prev => ({ ...prev, entry: v }))} />
-            <Input label="Exit Price" type="number" step="0.01" placeholder="2045.50" value={form.exit} onChange={(v:any) => setForm(prev => ({ ...prev, exit: v }))} />
-            <Input label="Stop Loss" type="number" step="0.01" placeholder="2030.00" value={form.sl} onChange={(v:any) => setForm(prev => ({ ...prev, sl: v }))} />
-            <Input label="Take Profit" type="number" step="0.01" placeholder="2060.00" value={form.tp} onChange={(v:any) => setForm(prev => ({ ...prev, tp: v }))} />
-          </div>
-        </div>
+          {step === 3 && (
+            <motion.div 
+              key="step3"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-6"
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-8">
+                  <div className="space-y-6">
+                    <h3 className="text-xl font-black text-white tracking-tight">Psychology Check</h3>
+                    <div className="grid grid-cols-1 gap-4">
+                      <Select label="Emotional State" value={form.emotion} options={['Calm / Confident', 'Excited / Rushed', 'Fearful / Hesitant', 'Revenge']} onChange={(v:any) => setForm(prev => ({ ...prev, emotion: v }))} />
+                      <Select label="Adherence" value={form.plan} options={[{ label: 'Strict Protocol ✅', value: 'yes' }, { label: 'Intuition / No Plan ❌', value: 'no' }, { label: 'Partial Protocol', value: 'partial' }]} onChange={(v:any) => setForm(prev => ({ ...prev, plan: v as any }))} />
+                      <Select label="Market Context" value={form.news} options={[{ label: 'Clear Skies (No News)', value: 'no' }, { label: 'Medium Impact', value: 'med' }, { label: 'High Impact ⚠️', value: 'high' }]} onChange={(v:any) => setForm(prev => ({ ...prev, news: v as any }))} />
+                    </div>
+                  </div>
+                  <TagInput 
+                   label="Strategy Tags" 
+                   value={form.tags} 
+                   onChange={(tags: string[]) => setForm(prev => ({ ...prev, tags }))} 
+                   placeholder="Scalp, LTF, MSS..." 
+                  />
+                </div>
 
-        <div className="bg-spotify-card p-6 rounded-lg space-y-6">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Outcomes & Psychology</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-left">
-            <Select label="Session" value={form.session} options={['Asia', 'London', 'New York']} onChange={(v:any) => setForm(prev => ({ ...prev, session: v as any }))} />
-            <Select label="Result" value={form.result} options={[{ label: 'Win ✅', value: 'win' }, { label: 'Loss ❌', value: 'loss' }, { label: 'Breakeven', value: 'be' }]} onChange={(v:any) => setForm(prev => ({ ...prev, result: v as any }))} />
-            <Input label={`P&L (${CURRENCIES[form.currency as keyof typeof CURRENCIES]?.symbol || '$'})`} type="number" step="0.01" placeholder="100.00" value={form.pnl} onChange={(v:any) => setForm(prev => ({ ...prev, pnl: v }))} />
-            <Input label="Duration" type="text" placeholder="2h 30min" value={form.dur} onChange={(v:any) => setForm(prev => ({ ...prev, dur: v }))} />
-            <Select label="Setup Type" value={form.setup} options={['MSS + FVG', 'OB Rejection', 'Liquidity Sweep + Engulfing', 'CHoCH', 'Other']} onChange={(v:any) => setForm(prev => ({ ...prev, setup: v }))} />
-            <Select label="Emotion" value={form.emotion} options={['Calm / Confident', 'Excited / Rushed', 'Fearful / Hesitant', 'Revenge']} onChange={(v:any) => setForm(prev => ({ ...prev, emotion: v }))} />
-            <Select label="Followed Plan?" value={form.plan} options={[{ label: 'Yes ✅', value: 'yes' }, { label: 'No ❌', value: 'no' }, { label: 'Partial', value: 'partial' }]} onChange={(v:any) => setForm(prev => ({ ...prev, plan: v as any }))} />
-            <Select label="News impact" value={form.news} options={[{ label: 'No News', value: 'no' }, { label: 'Med Impact', value: 'med' }, { label: 'High Impact', value: 'high' }]} onChange={(v:any) => setForm(prev => ({ ...prev, news: v as any }))} />
-            <div className="sm:col-span-2">
-              <TagInput 
-                label="Tags" 
-                value={form.tags} 
-                onChange={(tags: string[]) => setForm(prev => ({ ...prev, tags }))} 
-                placeholder="Add tags... (Enter or comma to add)" 
-              />
-            </div>
-          </div>
-        </div>
-      </div>
+                <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-8">
+                   <div className="space-y-6">
+                      <h3 className="text-xl font-black text-white tracking-tight">Financial Outcome</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                         <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
+                           <p className="text-[9px] font-black text-spotify-muted uppercase tracking-widest mb-1">Calculated P&L</p>
+                           <p className={`text-2xl font-black tracking-tighter ${cleanMoney(form.pnl) >= 0 ? 'text-spotify-green' : 'text-red-500'}`}>
+                             {CURRENCIES[form.currency as keyof typeof CURRENCIES]?.symbol || '$'}{form.pnl || '0.00'}
+                           </p>
+                         </div>
+                         <div className="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center justify-center">
+                            <span className={`text-[10px] font-black uppercase tracking-[0.2em] px-3 py-1.5 rounded-full ${form.result === 'win' ? 'bg-spotify-green/20 text-spotify-green' : form.result === 'loss' ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white'}`}>
+                              {form.result} Trade
+                            </span>
+                         </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Input label="Override P&L" type="number" step="0.01" value={form.pnl} onChange={(v:any) => setForm(prev => ({ ...prev, pnl: v }))} />
+                        <Input label="Duration" type="text" placeholder="e.g. 2h 30m" value={form.dur} onChange={(v:any) => setForm(prev => ({ ...prev, dur: v }))} />
+                      </div>
+                   </div>
+                </div>
+              </div>
 
-      <div className="bg-spotify-card p-6 rounded-lg space-y-6">
-        <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Entry Logic & Learnings</h3>
-        <TextArea label="Reason for Entry" value={form.reason} onChange={(v:any) => setForm(prev => ({ ...prev, reason: v }))} placeholder="Confluences, bias, timeframe analysis..." />
-        <TextArea label="Notes / Lesson Learned" value={form.notes} onChange={(v:any) => setForm(prev => ({ ...prev, notes: v }))} placeholder="What did you do well? What will you do differently next time?" />
-      </div>
+              <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <TextArea label="Execution Logic" value={form.reason} onChange={(v:any) => setForm(prev => ({ ...prev, reason: v }))} placeholder="Why did you take this setup? confluences..." />
+                  <TextArea label="Post-Trade Review" value={form.notes} onChange={(v:any) => setForm(prev => ({ ...prev, notes: v }))} placeholder="Key lessons, mistakes, or psychological wins..." />
+                </div>
+              </div>
 
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-center gap-3">
-          <AlertCircle size={18} className="text-red-500 shrink-0" />
-          <p className="text-xs font-bold text-red-500">{error}</p>
-        </div>
-      )}
+              {error && (
+                <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-center gap-3">
+                  <AlertCircle size={18} className="text-red-500 shrink-0" />
+                  <p className="text-xs font-bold text-red-500">{error}</p>
+                </div>
+              )}
 
-      <button 
-        type="submit" 
-        disabled={isSubmitting}
-        className="w-full bg-spotify-green hover:bg-spotify-green-hover text-spotify-darker font-extrabold uppercase tracking-widest text-sm py-4 rounded-full transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-      >
-        {isSubmitting && <Loader2 size={16} className="animate-spin" />}
-        {buttonLabel}
-      </button>
-    </form>
+              <div className="flex justify-between pt-4">
+                <button type="button" onClick={() => setStep(2)} className="text-spotify-muted px-8 py-4 rounded-full font-black text-xs uppercase tracking-widest hover:text-white transition-all">
+                  ← Previous
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isSubmitting}
+                  className="bg-spotify-green text-black px-12 py-4 rounded-full font-black text-xs uppercase tracking-widest hover:scale-105 active:scale-95 transition-all flex items-center gap-2 shadow-[0_0_30px_rgba(29,185,84,0.4)] disabled:opacity-50"
+                >
+                  {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} fill="black" />}
+                  {buttonLabel}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </form>
+    </div>
   );
 }
-
 
 function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () => void, onImport: (trades: any[]) => void, displayCurrency: string }) {
   const [importedData, setImportedData] = useState<any[]>([]);
@@ -3517,6 +4309,29 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const { showToast } = useAuth();
+
+  const handleShareTrade = async (t: Trade) => {
+    const pnlFormatted = formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency);
+    const text = `📊 Trade Result: ${t.result === 'win' ? 'WIN 🚀' : t.result === 'loss' ? 'LOSS 📉' : 'Breakeven'}\nAsset: ${t.pair} (${t.dir})\nP&L: ${t.pnl >= 0 ? '+' : ''}${pnlFormatted}\n#TradingResult #Forex #ENTJJournal`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Trade Result ${t.pair}`,
+          text: text,
+          url: window.location.href
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          showToast('Sharing failed', 'error');
+        }
+      }
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied to clipboard! 📋');
+    }
+  };
   
   const filteredTrades = useMemo(() => {
     let result = trades;
@@ -3761,6 +4576,13 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
                     </span>
                   </td>
                   <td className="px-3 md:px-5 py-4 text-right flex items-center justify-end gap-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleShareTrade(t); }}
+                      className="p-2 text-spotify-muted hover:text-spotify-green hover:bg-spotify-green/10 rounded-full transition-all"
+                      title="Share Result"
+                    >
+                      <Share2 size={12} />
+                    </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); onTradeClick(t); setIsEditingTrade?.(true); }}
                       className="p-2 text-spotify-muted hover:text-spotify-green hover:bg-spotify-green/10 rounded-full transition-all"
