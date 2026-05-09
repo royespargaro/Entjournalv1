@@ -73,6 +73,34 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "yearlyTarget"]
+    },
+    "DailySetup": {
+      "title": "Daily Setup",
+      "description": "A planned trading setup in the war room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "pair": { "type": "string" },
+        "dir": { "type": "string", "enum": ["Long", "Short"] },
+        "entry": { "type": "number" },
+        "sl": { "type": "number" },
+        "tp": { "type": "number" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["planned", "active"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["pair", "dir", "entry", "sl", "tp", "status", "userId"]
+    },
+    "DailyGoals": {
+      "title": "Daily Goals",
+      "description": "Trader's intentions for the day",
+      "type": "object",
+      "properties": {
+        "goals": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["goals"]
     }
   },
   "firestore": {
@@ -91,6 +119,14 @@
     "users/{userId}/reviews/{reviewId}": {
       "schema": "Review",
       "description": "Weekly reviews for a user"
+    },
+    "users/{userId}/dailySetups/{setupId}": {
+      "schema": "DailySetup",
+      "description": "Planned setups for the daily war room"
+    },
+    "users/{userId}/settings/dailyGoals": {
+      "schema": "DailyGoals",
+      "description": "Daily focus and goals"
     }
   }
 }
