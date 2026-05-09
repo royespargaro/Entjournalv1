@@ -28,7 +28,8 @@ import {
   MoreHorizontal,
   Target,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  Brain
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -286,6 +287,7 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, openRules, logout, user, dis
   const menuItems = [
     { id: 'history', label: 'Trade History', icon: History },
     { id: 'analytics', label: 'Full Analytics', icon: BarChart3 },
+    { id: 'habits', label: 'Trader Habits', icon: Brain },
     { id: 'review', label: 'Weekly Review', icon: BookOpen },
     { id: 'plan', label: 'Trading Plan', icon: Target },
     { id: 'import', label: 'Import MT5', icon: Download },
@@ -946,8 +948,9 @@ function JournalApp() {
     if (!user) return;
     
     // Normalize data for Firestore
+    const { id: _, userId: __, createdAt: ___, ...updatePayload } = tradeData;
     const normalized = {
-      ...tradeData,
+      ...updatePayload,
       entry: cleanMoney(tradeData.entry),
       exit: cleanMoney(tradeData.exit),
       lot: cleanMoney(tradeData.lot),
@@ -959,7 +962,7 @@ function JournalApp() {
 
     if (id.startsWith('temp-')) {
       // Optimistic/Local-only update for temporary trades
-      setTrades(prev => prev.map(t => t.id === id ? { ...t, ...normalized } : t));
+      setTrades(prev => prev.map(t => t.id === id ? { ...t, ...normalized, updatedAt: new Date().toISOString() } : t));
       showToast('Temporary trade updated locally');
       setIsEditingTrade(false);
       setSelectedTrade(null);
@@ -971,8 +974,8 @@ function JournalApp() {
     try {
       await updateDoc(doc(db, path), normalized);
       
-      // Update local state immediately for better UX
-      setTrades(prev => prev.map(t => t.id === id ? { ...t, ...normalized } : t));
+      // Update local state immediately for better UX - use ISO string for local state compatibility
+      setTrades(prev => prev.map(t => t.id === id ? { ...t, ...normalized, updatedAt: new Date().toISOString() } : t));
       
       showToast('Trade updated successfully');
       setIsEditingTrade(false);
@@ -1196,6 +1199,9 @@ function JournalApp() {
             {activePage === 'calendar' && (
               <CalendarPage trades={trades} displayCurrency={displayCurrency} />
             )}
+            {activePage === 'habits' && (
+              <HabitsPage trades={trades} displayCurrency={displayCurrency} />
+            )}
             {activePage === 'analytics' && (
               <AnalyticsPage trades={trades} displayCurrency={displayCurrency} />
             )}
@@ -1282,12 +1288,12 @@ function JournalApp() {
               <div className="grid grid-cols-2 gap-4">
                 <StatItem label="Date" value={selectedTrade.date} />
                 <StatItem label="Time" value={selectedTrade.time} />
+                <StatItem label="Lot Size" value={selectedTrade.lot} />
                 <StatItem label="Entry" value={formatNum(selectedTrade.entry)} mono />
                 <StatItem label="Exit" value={formatNum(selectedTrade.exit)} mono />
                 <StatItem label="P&L" value={formatCurrency(convertCurrency(cleanMoney(selectedTrade.pnl), selectedTrade.currency || 'USD', displayCurrency), displayCurrency)} color={selectedTrade.pnl >= 0 ? 'text-spotify-green' : 'text-red-500'} bold />
                 <StatItem label="Result" value={selectedTrade.result.toUpperCase()} />
                 <StatItem label="Setup" value={selectedTrade.setup} />
-                <StatItem label="Session" value={selectedTrade.session} />
               </div>
 
               {/* AI Analysis Section */}
@@ -1640,6 +1646,48 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
                 Review Blueprint
               </button>
             )}
+          </div>
+
+          <div className="bg-spotify-green/10 border border-spotify-green/20 rounded-[2.5rem] p-8 flex flex-col justify-between min-h-[300px]">
+             <div>
+                <p className="text-[10px] font-black text-spotify-green uppercase tracking-[0.3em] mb-6">Psychological Edge</p>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-spotify-green p-3 rounded-2xl text-black">
+                      <Brain size={24} />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black text-spotify-muted uppercase tracking-widest">Current Archetype</p>
+                      <p className="text-xl font-black text-white">{trades.length > 0 ? (trades.filter((t:any) => t.plan === 'yes').length / trades.length > 0.8 ? 'The Sniper' : 'The Tactician') : 'The Novice'}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="pt-4 space-y-4 border-t border-white/5">
+                    <div className="flex items-center justify-between text-[10px] font-black uppercase text-spotify-muted tracking-widest">
+                      <span>Rule Streak</span>
+                      <span className="text-white flex items-center gap-1"><Zap size={10} className="text-spotify-green" fill="currentColor" /> {(() => {
+                        let streak = 0;
+                        const sorted = [...trades].sort((a:any, b:any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                        for (const t of sorted) {
+                          if (t.plan === 'yes') streak++;
+                          else break;
+                        }
+                        return streak;
+                      })()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] font-black uppercase text-spotify-muted tracking-widest">
+                      <span>Plan Adherence</span>
+                      <span className="text-white">{trades.length > 0 ? Math.round((trades.filter((t:any) => t.plan === 'yes').length / trades.length) * 100) : 0}%</span>
+                    </div>
+                  </div>
+                </div>
+             </div>
+             <button 
+                onClick={() => setActivePage('habits')}
+                className="w-full py-4 bg-spotify-green text-black rounded-2xl text-[9px] font-black uppercase tracking-widest hover:scale-[1.02] transition-all"
+              >
+                Habit Analysis
+              </button>
           </div>
         </div>
       </div>
@@ -2406,11 +2454,10 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
             </div>
           </div>
           
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <Input label="Account Balance" type="number" value={form.balance} onChange={(v:any) => setForm({ ...form, balance: v })} />
-              <Input label="Risk %" type="number" step="0.1" value={form.riskPercent} onChange={(v:any) => setForm({ ...form, riskPercent: v })} />
-            </div>
+          <div className="grid grid-cols-2 gap-4 text-left">
+            <Input label="Account Balance" type="number" value={form.balance} onChange={(v:any) => setForm(prev => ({ ...prev, balance: v }))} />
+            <Input label="Risk %" type="number" step="0.1" value={form.riskPercent} onChange={(v:any) => setForm(prev => ({ ...prev, riskPercent: v }))} />
+          </div>
 
             {riskCalculation ? (
               <motion.div 
@@ -2451,40 +2498,39 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
               </div>
             )}
           </div>
-        </div>
 
         <div className="bg-spotify-card p-6 rounded-lg space-y-6">
           <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Trade Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="Date" type="date" value={form.date} onChange={(v:any) => setForm({ ...form, date: v })} />
-            <Input label="Time (UTC)" type="time" value={form.time} onChange={(v:any) => setForm({ ...form, time: v })} />
-            <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm({ ...form, pair: v })} />
-            <Select label="Direction" value={form.dir} options={['Short', 'Long']} onChange={(v:any) => setForm({ ...form, dir: v as any })} />
-            <Input label="Lot Size" type="number" step="0.01" placeholder="0.10" value={form.lot} onChange={(v:any) => { setForm({ ...form, lot: v }); setIsAutoLot(false); }} />
-            <Select label="Currency" value={form.currency} options={Object.keys(CURRENCIES)} onChange={(v:any) => setForm({ ...form, currency: v as any })} />
-            <Input label="Entry Price" type="number" step="0.01" placeholder="2035.50" value={form.entry} onChange={(v:any) => setForm({ ...form, entry: v })} />
-            <Input label="Exit Price" type="number" step="0.01" placeholder="2045.50" value={form.exit} onChange={(v:any) => setForm({ ...form, exit: v })} />
-            <Input label="Stop Loss" type="number" step="0.01" placeholder="2030.00" value={form.sl} onChange={(v:any) => setForm({ ...form, sl: v })} />
-            <Input label="Take Profit" type="number" step="0.01" placeholder="2060.00" value={form.tp} onChange={(v:any) => setForm({ ...form, tp: v })} />
+            <Input label="Date" type="date" value={form.date} onChange={(v:any) => setForm(prev => ({ ...prev, date: v }))} />
+            <Input label="Time (UTC)" type="time" value={form.time} onChange={(v:any) => setForm(prev => ({ ...prev, time: v }))} />
+            <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm(prev => ({ ...prev, pair: v }))} />
+            <Select label="Direction" value={form.dir} options={['Short', 'Long']} onChange={(v:any) => setForm(prev => ({ ...prev, dir: v as any }))} />
+            <Input label="Lot Size" type="number" step="0.01" placeholder="0.10" value={form.lot} onChange={(v:any) => { setForm(prev => ({ ...prev, lot: v })); setIsAutoLot(false); }} />
+            <Select label="Currency" value={form.currency} options={Object.keys(CURRENCIES)} onChange={(v:any) => setForm(prev => ({ ...prev, currency: v as any }))} />
+            <Input label="Entry Price" type="number" step="0.01" placeholder="2035.50" value={form.entry} onChange={(v:any) => setForm(prev => ({ ...prev, entry: v }))} />
+            <Input label="Exit Price" type="number" step="0.01" placeholder="2045.50" value={form.exit} onChange={(v:any) => setForm(prev => ({ ...prev, exit: v }))} />
+            <Input label="Stop Loss" type="number" step="0.01" placeholder="2030.00" value={form.sl} onChange={(v:any) => setForm(prev => ({ ...prev, sl: v }))} />
+            <Input label="Take Profit" type="number" step="0.01" placeholder="2060.00" value={form.tp} onChange={(v:any) => setForm(prev => ({ ...prev, tp: v }))} />
           </div>
         </div>
 
         <div className="bg-spotify-card p-6 rounded-lg space-y-6">
           <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Outcomes & Psychology</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="Session" value={form.session} options={['Asia', 'London', 'New York']} onChange={(v:any) => setForm({ ...form, session: v as any })} />
-            <Select label="Result" value={form.result} options={[{ label: 'Win ✅', value: 'win' }, { label: 'Loss ❌', value: 'loss' }, { label: 'Breakeven', value: 'be' }]} onChange={(v:any) => setForm({ ...form, result: v as any })} />
-            <Input label={`P&L (${CURRENCIES[form.currency as keyof typeof CURRENCIES]?.symbol || '$'})`} type="number" step="0.01" placeholder="100.00" value={form.pnl} onChange={(v:any) => setForm({ ...form, pnl: v })} />
-            <Input label="Duration" type="text" placeholder="2h 30min" value={form.dur} onChange={(v:any) => setForm({ ...form, dur: v })} />
-            <Select label="Setup Type" value={form.setup} options={['MSS + FVG', 'OB Rejection', 'Liquidity Sweep + Engulfing', 'CHoCH', 'Other']} onChange={(v:any) => setForm({ ...form, setup: v })} />
-            <Select label="Emotion" value={form.emotion} options={['Calm / Confident', 'Excited / Rushed', 'Fearful / Hesitant', 'Revenge']} onChange={(v:any) => setForm({ ...form, emotion: v })} />
-            <Select label="Followed Plan?" value={form.plan} options={[{ label: 'Yes ✅', value: 'yes' }, { label: 'No ❌', value: 'no' }, { label: 'Partial', value: 'partial' }]} onChange={(v:any) => setForm({ ...form, plan: v as any })} />
-            <Select label="News impact" value={form.news} options={[{ label: 'No News', value: 'no' }, { label: 'Med Impact', value: 'med' }, { label: 'High Impact', value: 'high' }]} onChange={(v:any) => setForm({ ...form, news: v as any })} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-left">
+            <Select label="Session" value={form.session} options={['Asia', 'London', 'New York']} onChange={(v:any) => setForm(prev => ({ ...prev, session: v as any }))} />
+            <Select label="Result" value={form.result} options={[{ label: 'Win ✅', value: 'win' }, { label: 'Loss ❌', value: 'loss' }, { label: 'Breakeven', value: 'be' }]} onChange={(v:any) => setForm(prev => ({ ...prev, result: v as any }))} />
+            <Input label={`P&L (${CURRENCIES[form.currency as keyof typeof CURRENCIES]?.symbol || '$'})`} type="number" step="0.01" placeholder="100.00" value={form.pnl} onChange={(v:any) => setForm(prev => ({ ...prev, pnl: v }))} />
+            <Input label="Duration" type="text" placeholder="2h 30min" value={form.dur} onChange={(v:any) => setForm(prev => ({ ...prev, dur: v }))} />
+            <Select label="Setup Type" value={form.setup} options={['MSS + FVG', 'OB Rejection', 'Liquidity Sweep + Engulfing', 'CHoCH', 'Other']} onChange={(v:any) => setForm(prev => ({ ...prev, setup: v }))} />
+            <Select label="Emotion" value={form.emotion} options={['Calm / Confident', 'Excited / Rushed', 'Fearful / Hesitant', 'Revenge']} onChange={(v:any) => setForm(prev => ({ ...prev, emotion: v }))} />
+            <Select label="Followed Plan?" value={form.plan} options={[{ label: 'Yes ✅', value: 'yes' }, { label: 'No ❌', value: 'no' }, { label: 'Partial', value: 'partial' }]} onChange={(v:any) => setForm(prev => ({ ...prev, plan: v as any }))} />
+            <Select label="News impact" value={form.news} options={[{ label: 'No News', value: 'no' }, { label: 'Med Impact', value: 'med' }, { label: 'High Impact', value: 'high' }]} onChange={(v:any) => setForm(prev => ({ ...prev, news: v as any }))} />
             <div className="sm:col-span-2">
               <TagInput 
                 label="Tags" 
                 value={form.tags} 
-                onChange={(tags: string[]) => setForm({ ...form, tags })} 
+                onChange={(tags: string[]) => setForm(prev => ({ ...prev, tags }))} 
                 placeholder="Add tags... (Enter or comma to add)" 
               />
             </div>
@@ -2494,8 +2540,8 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
 
       <div className="bg-spotify-card p-6 rounded-lg space-y-6">
         <h3 className="text-sm font-bold uppercase tracking-widest text-white/40">Entry Logic & Learnings</h3>
-        <TextArea label="Reason for Entry" value={form.reason} onChange={(v:any) => setForm({ ...form, reason: v })} placeholder="Confluences, bias, timeframe analysis..." />
-        <TextArea label="Notes / Lesson Learned" value={form.notes} onChange={(v:any) => setForm({ ...form, notes: v })} placeholder="What did you do well? What will you do differently next time?" />
+        <TextArea label="Reason for Entry" value={form.reason} onChange={(v:any) => setForm(prev => ({ ...prev, reason: v }))} placeholder="Confluences, bias, timeframe analysis..." />
+        <TextArea label="Notes / Lesson Learned" value={form.notes} onChange={(v:any) => setForm(prev => ({ ...prev, notes: v }))} placeholder="What did you do well? What will you do differently next time?" />
       </div>
 
       {error && (
@@ -3106,6 +3152,367 @@ function BulkEditModal({ isOpen, onClose, onSave, count }: any) {
   );
 }
 
+function HabitsPage({ trades, displayCurrency }: any) {
+  // Logic is now calculated in AnalyticsPage and passed? No, calculate it here or in App and pass down.
+  // Actually I'll move it back to App and pass it everywhere for consistency.
+  // Let's do that in a follow-up. For now, keep it here but reference the enhanced object.
+  const habitStats = useMemo(() => {
+    if (trades.length === 0) return null;
+
+    // 1. Plan Adherence
+    const planTrades = trades.filter((t: any) => t.plan === 'yes' || t.plan === 'partial');
+    const adherenceScore = Math.round((planTrades.length / trades.length) * 100);
+
+    // 2. Risk Consistency 
+    const risks = trades.map((t: any) => parseFloat(t.riskPercent || '0'));
+    const avgRisk = risks.reduce((a, b) => a + b, 0) / (risks.length || 1);
+    const riskDev = Math.sqrt(risks.map(x => Math.pow(x - avgRisk, 2)).reduce((a, b) => a + b, 0) / (risks.length || 1));
+    const riskScore = Math.max(0, Math.min(100, 100 - Math.round(riskDev * 50)));
+
+    // 3. Behavioral Streak
+    let currentStreak = 0;
+    const sortedTrades = [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    for (const t of sortedTrades) {
+      if (t.plan === 'yes') currentStreak++;
+      else break;
+    }
+
+    // 4. Performance Vector 
+    const wins = trades.filter((t: any) => cleanMoney(t.pnl) > 0);
+    const winRate = wins.length / trades.length;
+    
+    // R:R Analysis
+    const rrs = trades.filter((t: any) => {
+      const e = cleanMoney(t.entry);
+      const s = cleanMoney(t.sl);
+      return e > 0 && s > 0 && e !== s;
+    }).map((t: any) => {
+      const e = cleanMoney(t.entry);
+      const x = cleanMoney(t.exit);
+      const s = cleanMoney(t.sl);
+      return Math.abs(x - e) / Math.abs(e - s);
+    });
+    const avgRR = rrs.length > 0 ? rrs.reduce((a, b) => a + b, 0) / rrs.length : 1;
+
+    // Projection Utility
+    const winTrades = trades.filter((t: any) => cleanMoney(t.pnl) > 0);
+    const lossTrades = trades.filter((t: any) => cleanMoney(t.pnl) < 0);
+    const avgWin = winTrades.length > 0 ? winTrades.reduce((a, b) => a + cleanMoney(b.pnl), 0) / winTrades.length : 0;
+    const avgLoss = lossTrades.length > 0 ? Math.abs(lossTrades.reduce((a, b) => a + cleanMoney(b.pnl), 0) / lossTrades.length) : 0;
+    const expectedValue = (avgWin * winRate) - (avgLoss * (1 - winRate));
+    
+    const currentBalance = trades.reduce((acc: number, t: any) => acc + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD'), 0);
+    const projectionData = Array.from({ length: 13 }, (_, i) => ({
+      month: `M${i}`,
+      projected: currentBalance + (expectedValue * i * 20)
+    }));
+
+    const overallScore = Math.round((adherenceScore + riskScore + (winRate * 100)) / 3);
+
+    let persona = "The Novice";
+    let personaDesc = "You are just starting. Focus on sticking to your plan above all else.";
+    let level = "Lvl 1 - Conscious Incompetence";
+    
+    if (overallScore > 85) {
+      persona = "The Sniper";
+      personaDesc = "Elite discipline and exceptional risk management. You are on the path to master-level trading.";
+      level = "Lvl 4 - Unconscious Competence";
+    } else if (overallScore > 70) {
+      persona = "The Specialist";
+      personaDesc = "Consistent and steady. You have a solid grasp of your edge, keep fine-tuning.";
+      level = "Lvl 3 - Conscious Competence";
+    } else if (overallScore > 50) {
+      persona = "The Tactician";
+      personaDesc = "You have the tools but lack consistency. Discipline is your only bottleneck.";
+      level = "Lvl 2 - Conscious Development";
+    }
+
+    return { 
+      adherenceScore, riskScore, winRate, overallScore, 
+      persona, personaDesc, level, projectionData, 
+      avgRR, currentStreak 
+    };
+  }, [trades]);
+
+  if (!habitStats) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <Brain size={48} className="text-spotify-muted mb-4 opacity-20" />
+        <h2 className="text-xl font-black text-white mb-2">Not Enough Data</h2>
+        <p className="text-spotify-muted text-sm max-w-xs">Log at least one trade to see your habit analysis and future projection.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8 pb-20">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div className="space-y-2">
+          <p className="text-[10px] font-black uppercase text-spotify-green tracking-[0.3em] mb-1">{habitStats.level}</p>
+          <h2 className="text-4xl font-black text-white tracking-tighter">{habitStats.persona}</h2>
+          <p className="text-spotify-muted text-sm mt-1 max-w-md">{habitStats.personaDesc}</p>
+        </div>
+        <div className="flex gap-4">
+           <div className="bg-white/5 px-6 py-4 rounded-2xl border border-white/5 text-center">
+            <p className="text-[10px] font-black uppercase text-spotify-muted tracking-widest mb-1">Discipline Score</p>
+            <p className={`text-4xl font-black ${habitStats.overallScore > 70 ? 'text-spotify-green' : habitStats.overallScore > 40 ? 'text-yellow-500' : 'text-red-500'}`}>
+              {habitStats.overallScore}%
+            </p>
+          </div>
+          <div className="bg-spotify-green/10 px-6 py-4 rounded-2xl border border-spotify-green/20 text-center">
+            <p className="text-[10px] font-black uppercase text-spotify-green tracking-widest mb-1">Rule Streak</p>
+            <p className="text-4xl font-black text-white flex items-center justify-center gap-2">
+              <Zap size={24} className="text-spotify-green" fill="currentColor" />
+              {habitStats.currentStreak}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-8">
+        {[
+          { id: 1, name: 'Conscious Incompetence', icon: '🌑', goal: 'Follow a Plan' },
+          { id: 2, name: 'Conscious Development', icon: '🌗', goal: 'Manage Risk' },
+          { id: 3, name: 'Conscious Competence', icon: '🌕', goal: 'Consistency' },
+          { id: 4, name: 'Unconscious Competence', icon: '✨', goal: 'Scaling' }
+        ].map((stage) => {
+          const stageId = stage.id;
+          const currentLevelId = parseInt(habitStats.level.match(/Lvl (\d+)/)?.[1] || '0');
+          const isActive = currentLevelId === stageId;
+          const isPast = currentLevelId > stageId;
+          
+          return (
+            <div key={stageId} className={`p-4 rounded-2xl border transition-all relative overflow-hidden ${isActive ? 'bg-spotify-green text-black border-spotify-green' : isPast ? 'bg-white/10 border-white/10 opacity-60' : 'bg-white/5 border-white/5 opacity-30'}`}>
+              {isActive && (
+                <div className="absolute top-0 right-0 p-2 opacity-20">
+                  <Target size={40} />
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <span className="text-xl">{stage.icon}</span>
+                <div className="min-w-0">
+                  <p className="text-[8px] font-black uppercase tracking-widest opacity-60">Stage 0{stage.id}</p>
+                  <p className="text-[10px] font-black truncate">{stage.name}</p>
+                  <p className="text-[9px] font-bold opacity-60 mt-0.5">Focus: {stage.goal}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-spotify-card p-8 rounded-2xl border border-white/5">
+          <h3 className="text-xl font-black text-white tracking-tight mb-6 flex items-center gap-2">
+            <BookOpen size={20} className="text-spotify-green" /> Path to {habitStats.overallScore >= 85 ? 'System Mastery' : 'Next Level'}
+          </h3>
+          <div className="space-y-6">
+            {[
+              { 
+                label: 'Discipline', 
+                score: habitStats.adherenceScore, 
+                advice: habitStats.adherenceScore < 80 ? 'You are straying from your rules. Stick to "Plan: Yes" for the next 5 trades.' : 'Exceptional focus. Your rules are your edge.'
+              },
+              { 
+                label: 'Risk Control', 
+                score: habitStats.riskScore, 
+                advice: habitStats.riskScore < 70 ? 'Risk per trade is volatile. Aim for ±10% deviation only.' : 'Rock solid sizing. This prevents emotional sabotage.'
+              },
+              { 
+                label: 'Psychology', 
+                score: Math.min(100, Math.round((habitStats.currentStreak / 10) * 100)), 
+                advice: habitStats.currentStreak < 3 ? 'You are in a "Revenge" or "Frustration" zone. Reset your mind.' : `On a ${habitStats.currentStreak} trade rule-following streak! Keep going.`
+              }
+            ].map((item, idx) => (
+              <div key={idx} className="space-y-2">
+                <div className="flex justify-between items-end">
+                  <span className="text-xs font-black uppercase tracking-widest text-spotify-muted">{item.label}</span>
+                  <span className={`text-sm font-black ${item.score > 70 ? 'text-spotify-green' : item.score > 40 ? 'text-yellow-500' : 'text-red-500'}`}>{item.score}%</span>
+                </div>
+                <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                  <div className={`h-full transition-all duration-1000 ${item.score > 70 ? 'bg-spotify-green' : item.score > 40 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${item.score}%` }} />
+                </div>
+                <p className="text-[10px] text-spotify-muted leading-relaxed font-bold italic">{item.advice}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-spotify-card p-8 rounded-2xl border border-white/5">
+          <h3 className="text-xl font-black text-white tracking-tight mb-6 flex items-center gap-2">
+            <Zap size={20} className="text-spotify-green" /> Daily Habit Objective
+          </h3>
+          <div className="bg-white/5 p-6 rounded-2xl border border-white/5 flex items-start gap-4 mb-4">
+             <div className="p-3 bg-spotify-green/20 rounded-xl">
+               <Target size={24} className="text-spotify-green" />
+             </div>
+             <div>
+               <p className="text-[10px] font-black uppercase text-spotify-green tracking-widest mb-1">Current Quest</p>
+               <h4 className="text-lg font-black text-white tracking-tight">
+                 {habitStats.persona === 'The Novice' ? 'The Protocol Guard' : habitStats.persona === 'The Tactician' ? 'Risk Equalizer' : 'Scaling Efficiency'}
+               </h4>
+               <p className="text-xs text-spotify-muted font-bold mt-1">
+                 {habitStats.persona === 'The Novice' && 'Log 5 trades in a row where "Followed Plan" is marked as YES.'}
+                 {habitStats.persona === 'The Tactician' && 'Maintain a standard deviation of less than 0.2% on your risk size.'}
+                 {habitStats.persona === 'The Specialist' && 'Avoid trading during news sessions for the next 48 hours.'}
+                 {habitStats.persona === 'The Sniper' && 'Identify one "A+" setup per day and ignore everything else.'}
+               </p>
+             </div>
+          </div>
+          <p className="text-[10px] text-spotify-muted font-black uppercase tracking-[0.2em] mt-8 mb-4">Milestone Tracker</p>
+          <div className="space-y-3">
+             <div className="flex items-center gap-3 group">
+                <div className={`w-2 h-2 rounded-full ${habitStats.adherenceScore >= 90 ? 'bg-spotify-green shadow-[0_0_10px_rgba(29,185,84,0.5)]' : 'bg-white/10'}`} />
+                <span className={`text-[11px] font-bold ${habitStats.adherenceScore >= 90 ? 'text-white' : 'text-spotify-muted'}`}>90% Rule Adherence</span>
+             </div>
+             <div className="flex items-center gap-3 group">
+                <div className={`w-2 h-2 rounded-full ${habitStats.currentStreak >= 10 ? 'bg-spotify-green shadow-[0_0_10px_rgba(29,185,84,0.5)]' : 'bg-white/10'}`} />
+                <span className={`text-[11px] font-bold ${habitStats.currentStreak >= 10 ? 'text-white' : 'text-spotify-muted'}`}>10x Discipline Streak</span>
+             </div>
+             <div className="flex items-center gap-3 group">
+                <div className={`w-2 h-2 rounded-full ${habitStats.overallScore >= 80 ? 'bg-spotify-green shadow-[0_0_10px_rgba(29,185,84,0.5)]' : 'bg-white/10'}`} />
+                <span className={`text-[11px] font-bold ${habitStats.overallScore >= 80 ? 'text-white' : 'text-spotify-muted'}`}>Tier 4 Archetype Achievement</span>
+             </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-spotify-card p-6 rounded-2xl border border-white/5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-black uppercase text-spotify-muted tracking-widest">Plan Adherence</h3>
+            <span className="text-xs font-black text-white">{habitStats.adherenceScore}%</span>
+          </div>
+          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${habitStats.adherenceScore}%` }}
+              className="h-full bg-spotify-green"
+            />
+          </div>
+          <p className="text-[10px] text-spotify-muted font-bold leading-relaxed italic">Measure of how often you follow your pre-defined rules.</p>
+        </div>
+
+        <div className="bg-spotify-card p-6 rounded-2xl border border-white/5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-black uppercase text-spotify-muted tracking-widest">Risk Stability</h3>
+            <span className="text-xs font-black text-white">{habitStats.riskScore}%</span>
+          </div>
+          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${habitStats.riskScore}%` }}
+              className="h-full bg-white"
+            />
+          </div>
+          <p className="text-[10px] text-spotify-muted font-bold leading-relaxed italic">Measures how consistently you size your positions.</p>
+        </div>
+
+        <div className="bg-spotify-card p-6 rounded-2xl border border-white/5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-black uppercase text-spotify-muted tracking-widest">Edge Efficiency</h3>
+            <span className="text-xs font-black text-white">{Math.round(habitStats.winRate * 100)}%</span>
+          </div>
+          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${habitStats.winRate * 100}%` }}
+              className="h-full bg-spotify-green/50"
+            />
+          </div>
+          <p className="text-[10px] text-spotify-muted font-bold leading-relaxed italic">Probability of your strategy resulting in a win.</p>
+        </div>
+      </div>
+
+      <div className="bg-spotify-card rounded-2xl border border-white/5 p-8">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+          <div>
+            <h3 className="text-xl font-black text-white tracking-tight">12-Month Equity Projection</h3>
+            <p className="text-xs text-spotify-muted font-bold">Estimated growth if current habits remain unchanged</p>
+          </div>
+          <div className="md:text-right">
+            <p className="text-[10px] font-black uppercase text-spotify-muted tracking-widest mb-1">Projected End Balance</p>
+            <p className="text-2xl font-black text-spotify-green tracking-tighter">
+              {formatCurrency(convertCurrency(habitStats.projectionData[12].projected, 'USD', displayCurrency), displayCurrency)}
+            </p>
+          </div>
+        </div>
+
+        <div className="h-[300px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={habitStats.projectionData}>
+              <defs>
+                <linearGradient id="colorProj" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#1DB954" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#1DB954" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+              <XAxis 
+                dataKey="month" 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: 700 }}
+              />
+              <YAxis 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: 700 }}
+                tickFormatter={(val) => formatCurrency(convertCurrency(val, 'USD', displayCurrency), displayCurrency)}
+              />
+              <Tooltip 
+                content={({ active, payload }: any) => {
+                  if (active && payload && payload.length) {
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-black/90 border border-white/10 p-3 rounded-lg backdrop-blur-xl">
+                        <p className="text-[10px] font-black text-spotify-muted uppercase mb-2">{data.month}</p>
+                        <p className="text-sm font-black text-white">
+                          {formatCurrency(convertCurrency(data.projected, 'USD', displayCurrency), displayCurrency)}
+                        </p>
+                        <p className="text-[9px] font-bold text-spotify-green mt-1">ESTIMATED POSITION</p>
+                      </div>
+                    );
+                  }
+                  return null;
+                }}
+              />
+              <Area 
+                type="monotone" 
+                dataKey="projected" 
+                stroke="#1DB954" 
+                strokeWidth={3}
+                fillOpacity={1} 
+                fill="url(#colorProj)" 
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        
+        <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+            <h4 className="text-[10px] font-black uppercase text-spotify-muted tracking-widest mb-2 flex items-center gap-2">
+              <Zap size={12} className="text-spotify-green" /> Probability Filter
+            </h4>
+            <p className="text-xs text-white/70 font-medium leading-relaxed">
+              Based on your expected value per trade. 
+              The system assumes a volume of 20 trades per month maintaining current win rate and RR.
+            </p>
+          </div>
+          <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+            <h4 className="text-[10px] font-black uppercase text-spotify-muted tracking-widest mb-2 flex items-center gap-2">
+              <TrendingUp size={12} className="text-spotify-green" /> Strategy Feedback
+            </h4>
+            <p className="text-xs text-white/70 font-medium leading-relaxed">
+              Your average RR of <span className="text-white font-black">1:{habitStats.avgRR.toFixed(2)}</span> suggests you should focus on letting winners run longer to accelerate equity growth.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDate, setEndDate, onTradeClick, onDelete, onBulkDelete, onBulkUpdate, onImportOpen, displayCurrency, setIsEditingTrade }: any) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
@@ -3291,6 +3698,7 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
                 </th>
                 <th className="px-3 md:px-5 py-4 font-bold">Date</th>
                 <th className="px-3 md:px-5 py-4 font-bold">Pair</th>
+                <th className="px-3 md:px-5 py-4 font-bold hidden sm:table-cell text-center">Lot</th>
                 <th className="px-3 md:px-5 py-4 font-bold hidden sm:table-cell">Dir</th>
                 <th className="px-3 md:px-5 py-4 font-bold hidden md:table-cell">Setup</th>
                 <th className="px-3 md:px-5 py-4 font-bold hidden sm:table-cell text-right">Entry</th>
@@ -3317,6 +3725,9 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
                   </td>
                   <td className="px-3 md:px-5 py-4 text-[10px] md:text-xs font-mono text-spotify-muted">{t.date}</td>
                   <td className="px-3 md:px-5 py-4 text-[10px] md:text-xs font-bold">{t.pair}</td>
+                  <td className="px-3 md:px-5 py-4 hidden sm:table-cell text-center">
+                    <span className="text-[10px] font-mono text-white/60">{t.lot || '0.00'}</span>
+                  </td>
                   <td className="px-3 md:px-5 py-4 hidden sm:table-cell">
                     <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-[0.1em] ${t.dir === 'Long' ? 'bg-spotify-green/10 text-spotify-green' : 'bg-red-500/10 text-red-500'}`}>
                       {t.dir}
@@ -4136,12 +4547,13 @@ function TagInput({ label, value, onChange, placeholder }: { label: string, valu
 }
 
 function Input({ label, type, value, onChange, placeholder, v }: any) {
+  const val = v !== undefined ? v : value;
   return (
     <div className="space-y-1.5 flex flex-col group min-w-0">
       <label className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/30 ml-1 group-focus-within:text-spotify-green transition-colors truncate">{label}</label>
       <input 
         type={type} 
-        value={v !== undefined ? v : value} 
+        value={val ?? ''} 
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         className="bg-white/5 border border-white/10 rounded-md px-3 py-2.5 text-sm font-medium text-white outline-none focus:border-spotify-green transition-all w-full"
@@ -4155,7 +4567,7 @@ function Select({ label, value, options, onChange }: any) {
     <div className="space-y-1.5 flex flex-col group min-w-0">
       <label className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/30 ml-1 group-focus-within:text-spotify-green transition-colors truncate">{label}</label>
       <select 
-        value={value} 
+        value={value ?? ''} 
         onChange={e => onChange(e.target.value)}
         className="bg-spotify-black border border-white/10 rounded-md px-3 py-2.5 text-sm font-medium text-white outline-none focus:border-spotify-green transition-all w-full appearance-none cursor-pointer"
       >
@@ -4174,7 +4586,7 @@ function TextArea({ label, value, onChange, placeholder }: any) {
     <div className="space-y-1.5 flex flex-col">
       <label className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/30 ml-1">{label}</label>
       <textarea 
-        value={value} 
+        value={value ?? ''} 
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         className="bg-white/5 border border-white/10 rounded-md px-4 py-3 text-sm font-medium text-white outline-none focus:border-spotify-green min-h-[100px] resize-none transition-all"
@@ -4188,7 +4600,7 @@ function ReviewItem({ label, value, onChange, placeholder }: any) {
     <div className="space-y-3">
       <label className="block text-sm font-bold italic text-spotify-muted">"{label}"</label>
       <textarea 
-        value={value}
+        value={value ?? ''}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
         className="w-full bg-white/5 border-l-2 border-white/20 px-5 py-4 focus:border-spotify-green outline-none text-sm leading-relaxed transition-all min-h-[80px]"
