@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, createContext, useContext, useRef } from 'react';
 import html2canvas from 'html2canvas';
 import { QRCodeCanvas } from 'qrcode.react';
+import { Analytics } from '@vercel/analytics/react';
 import { 
   LayoutDashboard, 
   History, 
@@ -913,6 +914,7 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      <Analytics />
     </AuthContext.Provider>
   );
 }
