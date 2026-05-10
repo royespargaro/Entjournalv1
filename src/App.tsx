@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo, createContext, useContext } from 'react';
+import React, { useState, useEffect, useMemo, createContext, useContext, useRef } from 'react';
+import html2canvas from 'html2canvas';
+import { QRCodeCanvas } from 'qrcode.react';
 import { 
   LayoutDashboard, 
   History, 
@@ -34,7 +36,11 @@ import {
   Clock,
   ArrowRightCircle,
   Play,
-  Share2
+  Share2,
+  MessageCircle,
+  Twitter,
+  Send,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -264,8 +270,212 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+const ShareCard = ({ trade, user, displayCurrency }: { trade: Trade, user: User | null, displayCurrency: string }) => {
+  const isWin = trade.result === 'win';
+  const pnl = cleanMoney(trade.pnl);
+  const pnlFormatted = formatCurrency(convertCurrency(pnl, trade.currency || 'USD', displayCurrency), displayCurrency);
+  const accent = isWin ? '#00C853' : '#ff6b6b';
+  
+  const entryPrice = parseFloat(trade.entry.toString());
+  const exitPrice = parseFloat(trade.exit.toString());
+  let roi = 0;
+  if(entryPrice !== 0) {
+      roi = trade.dir === 'Long' ? ((exitPrice - entryPrice) / entryPrice * 100) : ((entryPrice - exitPrice) / entryPrice * 100);
+  }
 
-// --- Components ---
+  return (
+    <div
+      id="share-card"
+      style={{
+        width: '300px',
+        borderRadius: '20px',
+        overflow: 'hidden',
+        position: 'relative',
+        fontFamily: 'system-ui, sans-serif',
+        background: '#0a0a0a',
+        border: isWin ? '1px solid rgba(0,200,83,0.25)' : '1px solid rgba(255,60,60,0.25)'
+      }}
+    >
+      {/* Orbs */}
+      <div style={{ position: 'absolute', width: '280px', height: '280px', borderRadius: '50%', top: '-100px', right: '-80px', background: isWin ? 'radial-gradient(circle, rgba(0,200,83,0.13) 0%, transparent 70%)' : 'radial-gradient(circle, rgba(255,60,60,0.11) 0%, transparent 70%)', pointerEvents: 'none' }} />
+      <div style={{ position: 'absolute', width: '150px', height: '150px', borderRadius: '50%', bottom: '80px', left: '-40px', background: isWin ? 'radial-gradient(circle, rgba(0,200,83,0.07) 0%, transparent 70%)' : 'radial-gradient(circle, rgba(255,60,60,0.06) 0%, transparent 70%)', pointerEvents: 'none' }} />
+      
+      {/* Header */}
+      <div style={{ padding: '16px 18px 0px', position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', fontWeight: 500 }}>
+            {user?.displayName || 'Trader'}
+        </div>
+        <div style={{ color: accent, fontSize: '11px', fontWeight: 600, letterSpacing: '0.8px', textTransform: 'uppercase', opacity: 0.8 }}>
+          {trade.dir === 'Long' ? 'Long Position' : 'Short Position'}
+        </div>
+      </div>
+      
+      {/* Instrument */}
+      <div style={{ padding: '0 18px', position: 'relative', zIndex: 2 }}>
+        <div style={{ fontSize: '22px', fontWeight: 700, color: '#fff', letterSpacing: '0.5px', marginBottom: '2px' }}>{trade.pair}</div>
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '14px' }}>{trade.pair === 'XAUUSD' ? 'Gold / US Dollar' : trade.pair === 'BTCUSD' ? 'Bitcoin / US Dollar' : trade.pair} · {trade.session} Session</div>
+        
+        {/* ROI Section */}
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', letterSpacing: '0.5px', marginBottom: '1px' }}>ROI</div>
+        <div style={{ fontSize: '58px', fontWeight: 700, letterSpacing: '-2px', lineHeight: 1, marginBottom: '6px', color: isWin ? '#00C853' : '#ff6b6b' }}>{roi >= 0 ? '+' : ''}{roi.toFixed(2)}%</div>
+        <div style={{ fontSize: '18px', fontWeight: 500, marginBottom: '16px', color: isWin ? 'rgba(0,200,83,0.8)' : 'rgba(255,107,107,0.8)' }}>{trade.pnl >= 0 ? '+' : ''}{pnlFormatted} {isWin ? 'profit' : 'loss'}</div>
+        
+        {/* Stats */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
+            <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginBottom: '3px' }}>Entry</div>
+                <div style={{ fontSize: '15px', fontWeight: 500, color: '#fff' }}>{trade.entry}</div>
+            </div>
+            <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginBottom: '3px' }}>Exit</div>
+                <div style={{ fontSize: '15px', fontWeight: 500, color: '#fff' }}>{trade.exit}</div>
+            </div>
+        </div>
+      </div>
+
+      {/* Chart Section */}
+      <div style={{ position: 'relative', height: '160px', overflow: 'hidden', margin: '0', display: 'block' }}>
+        <svg width="300" height="160" viewBox="0 0 300 160">
+            <defs>
+                <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={accent} stopOpacity="0.12" />
+                    <stop offset="100%" stopColor={accent} stopOpacity="0" />
+                </linearGradient>
+            </defs>
+            <polyline
+                fill="none"
+                stroke={accent}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                points={isWin ? "0,140 40,130 80,110 120,115 160,85 200,60 240,35 300,10" : "0,20 40,28 80,45 120,40 160,65 200,90 240,115 300,145"}
+            />
+             <polygon
+                fill="url(#glow)"
+                points={isWin ? "0,140 40,130 80,110 120,115 160,85 200,60 240,35 300,10 300,160 0,160" : "0,20 40,28 80,45 120,40 160,65 200,90 240,115 300,145 300,160 0,160"}
+            />
+            {/* Glow circles at end */}
+            <circle cx="300" cy={isWin ? 10 : 145} r="4" fill={accent} />
+            <circle cx="300" cy={isWin ? 10 : 145} r="10" fill={accent} fillOpacity="0.2" />
+            <circle cx="300" cy={isWin ? 10 : 145} r="18" fill={accent} fillOpacity="0.1" />
+        </svg>
+        
+        {/* Rocket SVG */}
+        <svg width="90" height="100" viewBox="0 0 90 100" fill="none" style={{ position: 'absolute', bottom: '16px', right: '20px', zIndex: 3, transform: isWin ? 'none' : 'rotate(180deg) scaleX(-1)', display: 'block' }}>
+            <ellipse cx="45" cy="88" rx="20" ry="8" fill={isWin ? "rgba(0,200,83,0.15)" : "rgba(255,60,60,0.15)"}/>
+            <path d="M45 10 C35 10 28 20 28 35 L28 70 C28 75 32 78 45 80 C58 78 62 75 62 70 L62 35 C62 20 55 10 45 10Z" fill={isWin ? "#1a1a1a" : "#1a0d0d"} stroke={isWin ? "rgba(0,200,83,0.4)" : "rgba(255,60,60,0.4)"} strokeWidth="1"/>
+            <path d="M38 35 C38 25 42 18 45 16 C48 18 52 25 52 35 L52 55 L38 55Z" fill={isWin ? "rgba(0,200,83,0.2)" : "rgba(255,60,60,0.2)"}/>
+            <ellipse cx="45" cy="33" rx="6" ry="8" fill={isWin ? "rgba(0,200,83,0.15)" : "rgba(255,60,60,0.15)"} stroke={isWin ? "rgba(0,200,83,0.4)" : "rgba(255,60,60,0.4)"} strokeWidth="0.8"/>
+            <path d="M35 68 L28 80 L32 78 L30 90 L38 74 L34 76Z" fill={isWin ? "#00C853" : "#ff6b6b"} opacity="0.9"/>
+            <path d="M55 68 L62 80 L58 78 L60 90 L52 74 L56 76Z" fill={isWin ? "#00C853" : "#ff6b6b"} opacity="0.9"/>
+            <path d="M42 75 L40 92 L45 88 L50 92 L48 75Z" fill={isWin ? "#00C853" : "#ff6b6b"} opacity="0.7"/>
+            <path d="M34 40 L20 45 L26 50 L34 52Z" fill={isWin ? "#1a1a1a" : "#1a0d0d"} stroke={isWin ? "rgba(0,200,83,0.3)" : "rgba(255,60,60,0.3)"} strokeWidth="0.8"/>
+            <path d="M56 40 L70 45 L64 50 L56 52Z" fill={isWin ? "#1a1a1a" : "#1a0d0d"} stroke={isWin ? "rgba(0,200,83,0.3)" : "rgba(255,60,60,0.3)"} strokeWidth="0.8"/>
+            <ellipse cx="45" cy="35" rx="3" ry="3.5" fill={isWin ? "rgba(0,200,83,0.5)" : "rgba(255,60,60,0.5)"}/>
+            <path d="M10 55 L6 48 L14 50Z" fill={isWin ? "rgba(0,200,83,0.6)" : "rgba(255,60,60,0.6)"}/>
+            <path d="M20 35 L15 28 L23 31Z" fill={isWin ? "rgba(0,200,83,0.4)" : "rgba(255,60,60,0.4)"}/>
+            <path d="M80 55 L84 48 L76 50Z" fill={isWin ? "rgba(0,200,83,0.6)" : "rgba(255,60,60,0.6)"}/>
+            <path d="M70 35 L75 28 L67 31Z" fill={isWin ? "rgba(0,200,83,0.4)" : "rgba(255,60,60,0.4)"}/>
+        </svg>
+      </div>
+
+      {/* Footer */}
+      <div style={{ position: 'relative', zIndex: 2, background: 'rgba(0,0,0,0.4)', borderTop: isWin ? '1px solid rgba(0,200,83,0.15)' : '1px solid rgba(255,60,60,0.15)', padding: '12px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: accent, letterSpacing: '0.5px' }}>ENTJournal</div>
+            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>Track. Reflect. Improve.</div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)', marginTop: '2px' }}>entjournalv1.vercel.app</div>
+        </div>
+        <div style={{ background: '#fff', borderRadius: '6px', padding: '4px', width: '44px', height: '44px' }}>
+            <QRCodeCanvas value="https://entjournalv1.vercel.app" size={36} bgColor="#fff" fgColor="#000" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ShareModal = ({ trade, onClose, user, displayCurrency }: any) => {
+    const [preview, setPreview] = React.useState<string | null>(null);
+    const cardRef = React.useRef<HTMLDivElement>(null);
+
+    React.useEffect(() => {
+        if (cardRef.current) {
+            html2canvas(cardRef.current, { scale: 2, useCORS: true, backgroundColor: '#0a0a0a' }).then(canvas => {
+                setPreview(canvas.toDataURL('image/png'));
+            });
+        }
+    }, [trade]);
+
+    const downloadImage = () => {
+        if (preview) {
+            const link = document.createElement('a');
+            link.download = `trade-${trade.pair}-${trade.date}.png`;
+            link.href = preview;
+            link.click();
+        }
+    };
+
+    const shareNative = async () => {
+        if (preview) {
+            const blob = await (await fetch(preview)).blob();
+            const file = new File([blob], 'trade.png', { type: 'image/png' });
+            
+            if (navigator.share) {
+                await navigator.share({
+                    files: [file],
+                    title: 'My Trade Analysis',
+                    text: 'Check out this trade!'
+                });
+            } else {
+                 console.log('Native share not supported on this device/platform.');
+            }
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-spotify-card p-6 rounded-3xl w-full max-w-sm border border-white/10">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-white font-black uppercase tracking-widest text-sm">Share Trade</h2>
+                    <button onClick={onClose} className="text-spotify-muted hover:text-white"><X size={20} /></button>
+                </div>
+                
+                <div className="relative mb-6 rounded-2xl overflow-hidden bg-spotify-darker border border-white/10">
+                   {preview ? 
+                     <img src={preview} alt="Trade Preview" className="w-full" /> : 
+                     <div className="h-64 flex items-center justify-center text-spotify-muted">Generating card...</div>
+                   }
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                    <button onClick={downloadImage} className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white flex flex-col items-center gap-1 text-[10px] font-bold">
+                        <Download size={16}/> Download
+                    </button>
+                    <button onClick={shareNative} className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white flex flex-col items-center gap-1 text-[10px] font-bold">
+                        <Share2 size={16}/> Share
+                    </button>
+                    <button onClick={() => navigator.clipboard.writeText(window.location.href)} className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white flex flex-col items-center gap-1 text-[10px] font-bold">
+                         <Copy size={16}/> Link
+                    </button>
+                    <button onClick={() => window.open(`https://wa.me/?text=Check+out+my+trade+${window.location.href}`)} className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white flex flex-col items-center gap-1 text-[10px] font-bold">
+                        <MessageCircle size={16}/> WhatsApp
+                    </button>
+                    <button onClick={() => window.open(`https://twitter.com/intent/tweet?text=Check+out+my+trade+${window.location.href}`)} className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white flex flex-col items-center gap-1 text-[10px] font-bold">
+                        <Twitter size={16}/> Twitter
+                    </button>
+                    <button onClick={() => window.open(`https://t.me/share/url?url=${window.location.href}&text=${encodeURIComponent("Join me on ENTJournal — the smartest way to track your trades.")}`)} className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white flex flex-col items-center gap-1 text-[10px] font-bold">
+                        <Send size={16}/> Telegram
+                    </button>
+                </div>
+
+                <div style={{ position: 'absolute', left: '-9999px', top: '-9999px' }}>
+                    <div ref={cardRef}>
+                        <ShareCard trade={trade} user={user} displayCurrency={displayCurrency} />
+                    </div>
+                </div>
+            </div>
+        </div>
+    )
+}
 
 const BottomNav = ({ activePage, setActivePage, openMore }: any) => {
   const navItems = [
@@ -564,7 +774,18 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  
+  // --- Share Card State ---
+  const [sharingTrade, setSharingTrade] = useState<Trade | null>(null);
+  const [displayCurrency, setDisplayCurrency] = useState<string>(() => {
+    return localStorage.getItem('entj_display_currency') || 'USD';
+  });
 
+  useEffect(() => {
+    localStorage.setItem('entj_display_currency', displayCurrency);
+  }, [displayCurrency]);
+  const initiateShare = (trade: Trade) => setSharingTrade(trade);
+  
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -661,11 +882,22 @@ export default function App() {
         {!user ? (
           <LoginPage key="login" />
         ) : (
-          <JournalApp key="app" />
+          <JournalApp 
+            key="app" 
+            onShareTrade={initiateShare} 
+            displayCurrency={displayCurrency}
+            setDisplayCurrency={setDisplayCurrency}
+          />
         )}
       </AnimatePresence>
-
-      {/* Toast */}
+      {sharingTrade && (
+        <ShareModal 
+          trade={sharingTrade} 
+          onClose={() => setSharingTrade(null)} 
+          user={user} 
+          displayCurrency={displayCurrency} 
+        />
+      )}
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -731,7 +963,7 @@ function LoginPage() {
   );
 }
 
-function JournalApp() {
+function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onShareTrade: (t: Trade) => void, displayCurrency: string, setDisplayCurrency: (c: string) => void }) {
   const { user, showToast, logout } = useAuth();
 
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -742,6 +974,7 @@ function JournalApp() {
   const [activePage, setActivePage] = useState('dashboard');
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
+  const [closingSetup, setClosingSetup] = useState<DailySetup | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [isEditingTrade, setIsEditingTrade] = useState(false);
@@ -751,13 +984,7 @@ function JournalApp() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const [displayCurrency, setDisplayCurrency] = useState<string>(() => {
-    return localStorage.getItem('entj_display_currency') || 'USD';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('entj_display_currency', displayCurrency);
-  }, [displayCurrency]);
+  // Use prop-based displayCurrency
 
   useEffect(() => {
     if (!user) return;
@@ -1276,27 +1503,7 @@ function JournalApp() {
     }
   };
 
-  const handleShareTrade = async (t: Trade) => {
-    const pnlFormatted = formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency);
-    const text = `📊 Trade Detail: ${t.result.toUpperCase()}\nAsset: ${t.pair} (${t.dir})\nP&L: ${t.pnl >= 0 ? '+' : ''}${pnlFormatted}\nDate: ${t.date}\nSetup: ${t.setup}\n#Forex #Trading #ENTJJournal`;
-    
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Trade Analysis ${t.pair}`,
-          text: text,
-          url: window.location.href
-        });
-      } catch (err) {
-        if (err instanceof Error && err.name !== 'AbortError') {
-          showToast('Sharing failed', 'error');
-        }
-      }
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast('Copied to clipboard! 📋');
-    }
-  };
+  const handleShareTrade = onShareTrade;
 
   return (
     <div className="min-h-screen bg-spotify-black text-white font-sans selection:bg-spotify-green selection:text-spotify-darker">
@@ -1338,6 +1545,10 @@ function JournalApp() {
                 setActivePage={setActivePage} 
                 plan={tradingPlan} 
                 dailyGoals={dailyGoals}
+                onShareTrade={onShareTrade}
+                setups={dailySetups}
+                onToggleExecute={toggleExecuteSetup}
+                setClosingSetup={setClosingSetup}
               />
             )}
             {activePage === 'log' && (
@@ -1362,6 +1573,7 @@ function JournalApp() {
                 onImportOpen={() => setIsImportOpen(true)}
                 displayCurrency={displayCurrency}
                 setIsEditingTrade={setIsEditingTrade}
+                onShareTrade={onShareTrade}
               />
             )}
             {activePage === 'calendar' && (
@@ -1387,6 +1599,8 @@ function JournalApp() {
                 onToggleExecute={toggleExecuteSetup}
                 onLogTrade={addTrade}
                 displayCurrency={displayCurrency}
+                closingSetup={closingSetup}
+                setClosingSetup={setClosingSetup}
               />
             )}
             {activePage === 'plan' && (
@@ -1451,6 +1665,15 @@ function JournalApp() {
       )}
 
       {/* Detail Modal */}
+      {closingSetup && (
+        <Modal onClose={() => setClosingSetup(null)} title="Finalize Trade">
+          <CloseTradeFinalizer setup={closingSetup} onLog={(data: any) => {
+            addTrade(data);
+            updateDailySetup(closingSetup.id, { ...closingSetup, status: 'executed' });
+            setClosingSetup(null);
+          }} displayCurrency={displayCurrency} />
+        </Modal>
+      )}
       {selectedTrade && (
         <Modal 
           onClose={() => { setSelectedTrade(null); setIsEditingTrade(false); setAiAnalysis(null); }} 
@@ -1577,31 +1800,11 @@ function JournalApp() {
 
 // --- Page Components ---
 
-function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActivePage, plan, dailyGoals }: { stats: any, trades: any, onTradeClick: any, displayCurrency: any, setActivePage: any, plan: any, dailyGoals?: string }) {
+function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActivePage, plan, dailyGoals, onShareTrade, setups, onToggleExecute, setClosingSetup }: { stats: any, trades: any, onTradeClick: any, displayCurrency: any, setActivePage: any, plan: any, dailyGoals?: string, onShareTrade: (t: Trade) => void, setups: DailySetup[], onToggleExecute: (id: string, current: string) => void, setClosingSetup: (s: DailySetup) => void }) {
   const { user, showToast } = useAuth();
   const firstName = user?.displayName?.split(' ')[0] || 'Trader';
 
-  const handleShareTrade = async (t: Trade) => {
-    const pnlFormatted = formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency);
-    const text = `📊 Latest Trade: ${t.result === 'win' ? 'SUCCESS ✅' : t.result === 'loss' ? 'LEARNING 📉' : 'BE'}\nAsset: ${t.pair} (${t.dir})\nP&L: ${t.pnl >= 0 ? '+' : ''}${pnlFormatted}\n#Trading #Forex #ENTJJournal`;
-    
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Trade Report ${t.pair}`,
-          text: text,
-          url: window.location.href
-        });
-      } catch (err) {
-        if (err instanceof Error && err.name !== 'AbortError') {
-          showToast('Sharing failed', 'error');
-        }
-      }
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast('Copied to clipboard! 📋');
-    }
-  };
+  const handleShareTrade = onShareTrade;
 
   // Calculate monthly stats for plan progress
   const currentMonth = new Date().getMonth();
@@ -1769,11 +1972,46 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
           </div>
           
           <div className="flex items-center gap-3 bg-white/5 border border-white/10 px-6 py-3 rounded-full text-[10px] font-black text-white uppercase tracking-widest group-hover:bg-spotify-green group-hover:text-black group-hover:border-spotify-green transition-all relative z-10 self-start md:self-center">
-             <span>{dailyGoals ? 'Command Center' : 'Initialize Session'}</span>
+             <span>{dailyGoals ? 'Command Center' : 'Begin'}</span>
              <ChevronRight size={14} className="group-hover:translate-x-1 transition-transform" />
           </div>
         </motion.div>
       </AnimatePresence>
+
+      {setups.filter(s => s.status === 'active').length > 0 && (
+        <div className="space-y-4">
+          <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-spotify-muted px-2">Active Trades</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {setups.filter(s => s.status === 'active').map((setup, i) => (
+              <motion.div 
+                key={setup.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
+                className="bg-white/[0.03] border border-white/5 rounded-xl p-4 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-3">
+                   <div className="flex flex-col">
+                       <span className="text-sm font-black text-white">{setup.pair}</span>
+                       <span className={`text-[9px] font-black uppercase ${setup.dir === 'Long' ? 'text-spotify-green' : 'text-red-500'}`}>{setup.dir}</span>
+                   </div>
+                </div>
+                <div className="flex gap-2 text-[9px] text-spotify-muted font-mono">
+                    <span>E:{setup.entry}</span>
+                    <span>TP:{setup.tp}</span>
+                    <span>SL:{setup.sl}</span>
+                </div>
+                <button 
+                  onClick={() => setClosingSetup(setup)}
+                  className="text-[9px] font-black uppercase bg-red-500/10 text-red-500 px-3 py-1 rounded-full hover:bg-red-500 hover:text-white transition-all font-sans"
+                 >
+                   Close
+                 </button>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white/[0.02] rounded-3xl p-6 md:p-10 border border-white/5">
@@ -2095,9 +2333,8 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
   );
 }
 
-function DailyPlanPage({ goals, setups, onSaveGoals, onAddSetup, onUpdateSetup, onDeleteSetup, onToggleExecute, onLogTrade, displayCurrency }: any) {
+function DailyPlanPage({ goals, setups, onSaveGoals, onAddSetup, onUpdateSetup, onDeleteSetup, onToggleExecute, onLogTrade, displayCurrency, closingSetup, setClosingSetup }: any) {
   const [isAddingSetup, setIsAddingSetup] = useState(false);
-  const [closingSetup, setClosingSetup] = useState<DailySetup | null>(null);
   const [localGoals, setLocalGoals] = useState(goals);
   const [isEditingGoals, setIsEditingGoals] = useState(false);
 
@@ -4305,33 +4542,13 @@ function HabitsPage({ trades, displayCurrency }: any) {
   );
 }
 
-function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDate, setEndDate, onTradeClick, onDelete, onBulkDelete, onBulkUpdate, onImportOpen, displayCurrency, setIsEditingTrade }: any) {
+function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDate, setEndDate, onTradeClick, onDelete, onBulkDelete, onBulkUpdate, onImportOpen, displayCurrency, setIsEditingTrade, onShareTrade }: any) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [search, setSearch] = useState('');
   const { showToast } = useAuth();
 
-  const handleShareTrade = async (t: Trade) => {
-    const pnlFormatted = formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency);
-    const text = `📊 Trade Result: ${t.result === 'win' ? 'WIN 🚀' : t.result === 'loss' ? 'LOSS 📉' : 'Breakeven'}\nAsset: ${t.pair} (${t.dir})\nP&L: ${t.pnl >= 0 ? '+' : ''}${pnlFormatted}\n#TradingResult #Forex #ENTJJournal`;
-    
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Trade Result ${t.pair}`,
-          text: text,
-          url: window.location.href
-        });
-      } catch (err) {
-        if (err instanceof Error && err.name !== 'AbortError') {
-          showToast('Sharing failed', 'error');
-        }
-      }
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast('Copied to clipboard! 📋');
-    }
-  };
+  const handleShareTrade = onShareTrade;
   
   const filteredTrades = useMemo(() => {
     let result = trades;
