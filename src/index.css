@@ -74,6 +74,19 @@
   @apply pl-1;
 }
 
-.markdown-analysis strong {
-  @apply text-white font-bold;
+@keyframes impulse-green {
+  0%, 100% { box-shadow: 0 0 0px rgba(29, 185, 84, 0); border-color: rgba(29, 185, 84, 0.2); }
+  50% { box-shadow: 0 0 15px rgba(29, 185, 84, 0.6); border-color: rgba(29, 185, 84, 0.8); }
+}
+@keyframes impulse-red {
+  0%, 100% { box-shadow: 0 0 0px rgba(239, 68, 68, 0); border-color: rgba(239, 68, 68, 0.2); }
+  50% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.6); border-color: rgba(239, 68, 68, 0.8); }
+}
+
+.impulse-green {
+  animation: impulse-green 1.2s infinite ease-in-out;
+}
+
+.impulse-red {
+  animation: impulse-red 1.2s infinite ease-in-out;
 }

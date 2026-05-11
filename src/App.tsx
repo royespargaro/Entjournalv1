@@ -58,6 +58,12 @@ import {
   Area
 } from 'recharts';
 import Markdown from 'react-markdown';
+import { PAIR_CONFIG, CURRENCIES, SESSIONS } from './constants';
+import { convertCurrency, formatNum, formatCurrency, cleanMoney } from './lib/utils';
+import { BottomNav } from './components/BottomNav';
+import { EdgeProtocolModal } from './components/EdgeProtocolModal';
+import { OnboardingModal } from './components/OnboardingModal';
+import { detectSession } from './utils/sessionDetector';
 
 // --- Firebase ---
 import { initializeApp } from 'firebase/app';
@@ -68,7 +74,10 @@ import {
   GoogleAuthProvider, 
   signOut,
   User,
-  browserPopupRedirectResolver
+  browserPopupRedirectResolver,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -140,60 +149,7 @@ interface DailyGoals {
   updatedAt: any;
 }
 
-const PAIR_CONFIG: Record<string, { multiplier: number, digits: number, pipSize: number }> = {
-  'XAUUSD': { multiplier: 100, digits: 2, pipSize: 0.1 }, 
-  'BTCUSD': { multiplier: 1, digits: 2, pipSize: 1 },
-  'EURUSD': { multiplier: 100000, digits: 5, pipSize: 0.0001 },
-  'GBPUSD': { multiplier: 100000, digits: 5, pipSize: 0.0001 },
-  'NAS100': { multiplier: 20, digits: 2, pipSize: 0.1 },
-  'US30': { multiplier: 10, digits: 2, pipSize: 1 },
-  'ETHUSD': { multiplier: 1, digits: 2, pipSize: 1 },
-};
 
-const CURRENCIES = {
-  USD: { symbol: '$', code: 'USD', rate: 1 },
-  EUR: { symbol: '€', code: 'EUR', rate: 0.93 },
-  GBP: { symbol: '£', code: 'GBP', rate: 0.81 },
-  JPY: { symbol: '¥', code: 'JPY', rate: 155.50 },
-  AUD: { symbol: 'A$', code: 'AUD', rate: 1.54 },
-  CAD: { symbol: 'C$', code: 'CAD', rate: 1.37 },
-  CHF: { symbol: 'CHf', code: 'CHF', rate: 0.91 },
-  CNY: { symbol: '¥', code: 'CNY', rate: 7.23 },
-  INR: { symbol: '₹', code: 'INR', rate: 83.50 },
-  IDR: { symbol: 'Rp', code: 'IDR', rate: 16250 },
-  HKD: { symbol: 'HK$', code: 'HKD', rate: 7.82 },
-  SGD: { symbol: 'S$', code: 'SGD', rate: 1.35 },
-  NZD: { symbol: 'NZ$', code: 'NZD', rate: 1.66 },
-  BRL: { symbol: 'R$', code: 'BRL', rate: 5.12 },
-  SAR: { symbol: 'SR', code: 'SAR', rate: 3.75 },
-  AED: { symbol: 'DH', code: 'AED', rate: 3.67 },
-};
-
-const SESSIONS = [
-  { name: 'Sydney', start: 21, end: 6, color: 'bg-blue-500/20 text-blue-500 border-blue-500/30' },
-  { name: 'Tokyo', start: 0, end: 9, color: 'bg-purple-500/20 text-purple-500 border-purple-500/30' },
-  { name: 'London', start: 7, end: 16, color: 'bg-orange-500/20 text-orange-500 border-orange-500/30' },
-  { name: 'New York', start: 12, end: 21, color: 'bg-spotify-green/20 text-spotify-green border-spotify-green/30' }
-];
-
-function getCurrentSessions(): string[] {
-  const utcHour = new Date().getUTCHours();
-  return SESSIONS.filter(s => {
-    if (s.start < s.end) {
-      return utcHour >= s.start && utcHour < s.end;
-    } else {
-      return utcHour >= s.start || utcHour < s.end;
-    }
-  }).map(s => s.name);
-}
-
-const convertCurrency = (amount: number, from: string, to: string) => {
-  const fromRate = CURRENCIES[from as keyof typeof CURRENCIES]?.rate || 1;
-  const toRate = CURRENCIES[to as keyof typeof CURRENCIES]?.rate || 1;
-  // Convert to USD first, then to target
-  const inUsd = amount / fromRate;
-  return inUsd * toRate;
-};
 
 interface Review {
   id: string; // Changed to string for Firestore ID
@@ -223,12 +179,18 @@ const AuthContext = createContext<{
   user: User | null;
   loading: boolean;
   login: () => Promise<void>;
+  loginWithEmail: (email: string, password: string) => Promise<void>;
+  registerWithEmail: (email: string, password: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   showToast: (message: string, type?: 'success' | 'error') => void;
 }>({
   user: null,
   loading: true,
   login: async () => {},
+  loginWithEmail: async () => {},
+  registerWithEmail: async () => {},
+  resetPassword: async () => {},
   logout: async () => {},
   showToast: () => {}
 });
@@ -477,63 +439,9 @@ const ShareModal = ({ trade, onClose, user, displayCurrency }: any) => {
     )
 }
 
-const BottomNav = ({ activePage, setActivePage, openMore }: any) => {
-  const navItems = [
-    { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
-    { id: 'daily-plan', label: 'War Room', icon: Target },
-    { id: 'log', label: 'Log', icon: PlusCircle, isCenter: true },
-    { id: 'history', label: 'History', icon: History },
-    { id: 'more', label: 'Menu', icon: MoreHorizontal, isAction: true },
-  ];
 
-  return (
-    <div className="fixed bottom-0 left-0 right-0 z-[100] px-4 pb-10 pt-4 bg-gradient-to-t from-spotify-black via-spotify-black/40 to-transparent pointer-events-none">
-      <nav className="max-w-xs mx-auto bg-white/5 backdrop-blur-3xl border border-white/5 rounded-full p-1.5 flex items-center justify-between shadow-2xl pointer-events-auto">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = activePage === item.id;
-          
-          if (item.isCenter) {
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActivePage(item.id)}
-                className="relative group p-2"
-              >
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-500 ${isActive ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}>
-                  <Icon size={20} strokeWidth={2.5} />
-                </div>
-              </button>
-            );
-          }
 
-          return (
-            <button
-              key={item.id}
-              onClick={() => {
-                if (item.isAction) openMore();
-                else setActivePage(item.id);
-              }}
-              className="relative flex-1 flex flex-col items-center py-2 group"
-            >
-              <div className={`transition-all duration-500 ${isActive ? 'text-white' : 'text-spotify-muted hover:text-white/60'}`}>
-                <Icon size={18} strokeWidth={isActive ? 2.5 : 1.5} />
-              </div>
-              {isActive && (
-                <motion.div 
-                  layoutId="active-dot" 
-                  className="absolute -bottom-1 w-1 h-1 bg-spotify-green rounded-full shadow-[0_0_8px_rgba(30,215,96,0.8)]"
-                />
-              )}
-            </button>
-          );
-        })}
-      </nav>
-    </div>
-  );
-};
-
-const MoreMenu = ({ isOpen, onClose, setActivePage, openRules, logout, user, displayCurrency, setDisplayCurrency }: any) => {
+const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, logout, user, displayCurrency, setDisplayCurrency }: any) => {
   if (!isOpen) return null;
 
   const menuItems = [
@@ -646,7 +554,7 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, openRules, logout, user, dis
 
             <button 
               onClick={() => {
-                openRules();
+                setIsRulesOpen(true);
                 onClose();
               }}
               className="w-full flex items-center justify-center gap-2 bg-spotify-green/10 border border-spotify-green/20 rounded-2xl py-4 text-[10px] font-black tracking-[0.2em] uppercase text-spotify-green hover:bg-spotify-green hover:text-black transition-all duration-300"
@@ -694,80 +602,10 @@ const AuthStatus = () => {
   );
 };
 
-const formatNum = (val: any, decimals: number = 2) => {
-  if (val === undefined || val === null || val === '') return '0.00';
-  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
-  if (isNaN(n)) return '0.00';
-  return n.toLocaleString(undefined, { 
-    minimumFractionDigits: decimals, 
-    maximumFractionDigits: decimals 
-  });
-};
 
-const formatCurrency = (val: any, currency: string = 'USD') => {
-  const meta = CURRENCIES[currency as keyof typeof CURRENCIES] || CURRENCIES.USD;
-  const decimals = currency === 'IDR' ? 0 : 2;
-  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, '')) || 0;
-  const absVal = Math.abs(n);
-  const sign = n < 0 ? '-' : '';
-  
-  if (currency === 'IDR') {
-    return `${sign}${meta.symbol}${Math.round(absVal).toLocaleString('id-ID')}`;
-  }
-  
-  return `${sign}${meta.symbol}${formatNum(absVal, decimals)}`;
-};
 
-const cleanMoney = (val: any): number => {
-  if (val === undefined || val === null || val === '') return 0;
-  if (typeof val === 'number') return isNaN(val) ? 0 : val;
-  
-  let s = String(val).trim();
-  
-  // Normalize various dash characters (long dash, minus sign, etc.) to standard hyphen
-  s = s.replace(/[−–—]/g, '-');
-  
-  // Remove all spaces (especially thousand separators like 1 000.00)
-  s = s.replace(/\s+/g, ''); 
-  
-  // Handle (100.00) format for negatives
-  if (s.startsWith('(') && s.endsWith(')')) {
-    s = '-' + s.substring(1, s.length - 1);
-  }
-  
-  // International decimal support (e.g. 1.234,56 or 1,234.56)
-  if (s.includes(',') && !s.includes('.')) {
-    s = s.replace(',', '.');
-  } else if (s.includes(',') && s.includes('.')) {
-    if (s.lastIndexOf(',') < s.lastIndexOf('.')) {
-      s = s.replace(/,/g, '');
-    } else {
-      s = s.replace(/\./g, '').replace(',', '.');
-    }
-  } else if (s.includes(',')) {
-    s = s.replace(/,/g, '');
-  }
 
-  // Handle trailing minus (some banks/brokers)
-  if (s.endsWith('-')) {
-    s = '-' + s.substring(0, s.length - 1);
-  }
 
-  // Final cleanup: keep only digits, dot, and hyphen
-  const cleaned = s.replace(/[^\d.\-]/g, '');
-  
-  // Ensure we don't end up with multiple hyphens or dots if input was weird
-  const hasMinus = cleaned.startsWith('-');
-  const numericPart = cleaned.replace(/-/g, '');
-  const dotParts = numericPart.split('.');
-  let normalizedNumeric = dotParts[0];
-  if (dotParts.length > 1) {
-    normalizedNumeric += '.' + dotParts.slice(1).join('');
-  }
-  
-  const parsed = parseFloat((hasMinus ? '-' : '') + normalizedNumeric);
-  return isNaN(parsed) ? 0 : parsed;
-};
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -780,11 +618,19 @@ export default function App() {
   const [displayCurrency, setDisplayCurrency] = useState<string>(() => {
     return localStorage.getItem('entj_display_currency') || 'USD';
   });
+  
+  // --- Onboarding State ---
+  const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('onboarding_completed'));
 
   useEffect(() => {
     localStorage.setItem('entj_display_currency', displayCurrency);
   }, [displayCurrency]);
   const initiateShare = (trade: Trade) => setSharingTrade(trade);
+  
+  const finishOnboarding = () => {
+    localStorage.setItem('onboarding_completed', 'true');
+    setShowOnboarding(false);
+  };
   
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -826,6 +672,34 @@ export default function App() {
       }
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  const loginWithEmail = async (email: string, password: string) => {
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (error: any) {
+      console.error("Login Error:", error);
+      showToast(error.message, 'error');
+    }
+  };
+
+  const registerWithEmail = async (email: string, password: string) => {
+    try {
+      await createUserWithEmailAndPassword(auth, email, password);
+    } catch (error: any) {
+      console.error("Register Error:", error);
+      showToast(error.message, 'error');
+    }
+  };
+
+  const resetPassword = async (email: string) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      showToast('Password reset email sent', 'success');
+    } catch (error: any) {
+      console.error("Reset Password Error:", error);
+      showToast(error.message, 'error');
     }
   };
 
@@ -877,7 +751,8 @@ export default function App() {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, showToast }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, showToast, loginWithEmail, registerWithEmail, resetPassword }}>
+      {showOnboarding && <OnboardingModal finishOnboarding={finishOnboarding} />}
       <AnimatePresence mode="wait">
         {!user ? (
           <LoginPage key="login" />
@@ -918,46 +793,76 @@ export default function App() {
 }
 
 function LoginPage() {
-  const { login } = useAuth();
-  
+  const { login, loginWithEmail, registerWithEmail, resetPassword } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 1.2, ease: "easeOut" }}
-      className="min-h-screen bg-spotify-black flex flex-col items-center justify-center p-6 relative overflow-hidden"
+      transition={{ duration: 1.5, ease: "easeInOut" }}
+      className="min-h-screen bg-[#0a0a0a] flex flex-col items-center justify-center p-8 relative overflow-hidden font-mono"
     >
-      <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-spotify-green/5 blur-[140px] rounded-full pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-white/5 blur-[140px] rounded-full pointer-events-none" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,#1a1a1a_0%,#0a0a0a_70%)] pointer-events-none" />
       
-      <div className="w-full max-w-sm text-center z-10 space-y-12">
-        <div className="space-y-4">
-          <h1 className="text-6xl font-black tracking-tighter text-white opacity-90">ENT<span className="text-spotify-green italic">J</span></h1>
-          <div className="flex flex-col items-center gap-2">
-            <p className="text-[10px] text-spotify-muted font-black uppercase tracking-[0.5em]">Trading Journal</p>
-            <div className="w-8 h-[1px] bg-white/10" />
-          </div>
+      <div className="w-full max-w-sm z-10 border border-white/10 p-10 bg-[#0f0f0f]/80 backdrop-blur-xl">
+        <div className="mb-10 text-center">
+          <h1 className="text-3xl font-extrabold text-white tracking-widest uppercase">ENTJ</h1>
+          <div className="h-[2px] w-8 bg-white mx-auto mt-4 mb-2" />
+          <p className="text-[9px] text-white/50 uppercase tracking-widest">Trading Journal Interface</p>
         </div>
 
-        <div className="space-y-6">
-          <p className="text-xs text-white/40 font-medium leading-relaxed max-w-[200px] mx-auto">
-            Professional performance tracking & analytical intelligence.
-          </p>
-          
+        <div className="space-y-4">
           <button 
             onClick={login}
-            className="w-full relative group"
+            className="w-full flex items-center justify-center gap-3 bg-white text-black font-extrabold text-xs uppercase tracking-widest py-3 hover:bg-slate-200 transition-colors"
           >
-            <div className="absolute inset-0 bg-white blur-xl opacity-0 group-hover:opacity-10 transition-opacity duration-700" />
-            <div className="relative flex items-center justify-center gap-4 bg-white text-black font-black uppercase tracking-[0.3em] text-[10px] py-5 rounded-full transition-all duration-500 hover:scale-[1.01] active:scale-[0.99]">
-              <span>Begin Session</span>
-              <ChevronRight size={14} strokeWidth={3} />
-            </div>
+            Sign in with Google
           </button>
+          
+          <div className="relative flex items-center py-2">
+            <div className="flex-grow border-t border-white/10"></div>
+            <span className="flex-shrink mx-4 text-white/20 text-[9px] text-center uppercase tracking-widest">or</span>
+            <div className="flex-grow border-t border-white/10"></div>
+          </div>
+          
+          <input 
+            type="email" 
+            placeholder="Email" 
+            value={email} 
+            onChange={e => setEmail(e.target.value)}
+            className="w-full bg-[#1a1a1a] border border-white/10 px-4 py-3 text-white text-xs font-mono placeholder:text-white/20 focus:outline-none focus:border-white/50"
+          />
+          <input 
+            type="password" 
+            placeholder="Password" 
+            value={password} 
+            onChange={e => setPassword(e.target.value)}
+            className="w-full bg-[#1a1a1a] border border-white/10 px-4 py-3 text-white text-xs font-mono placeholder:text-white/20 focus:outline-none focus:border-white/50"
+          />
+          <button 
+            onClick={() => isRegistering ? registerWithEmail(email, password) : loginWithEmail(email, password)}
+            className="w-full bg-white text-black font-extrabold text-xs uppercase tracking-widest py-3 hover:bg-slate-200 transition-colors"
+          >
+            {isRegistering ? 'Register Access' : 'Sign In'}
+          </button>
+          
+          <div className="flex justify-between items-center text-[10px] mt-4">
+            <button onClick={() => resetPassword(email)} className="text-white/40 hover:text-white uppercase tracking-wider">Forgot password?</button>
+            <button onClick={() => setIsRegistering(!isRegistering)} className="text-white/40 hover:text-white uppercase tracking-wider">{isRegistering ? 'Sign In' : 'Register'}</button>
+          </div>
         </div>
         
-        <p className="text-[8px] text-white/20 uppercase tracking-[0.4em] font-black">Persistence v2.0</p>
+        <div className="mt-12 text-center text-[9px] text-white/10 uppercase tracking-[0.2em] font-light">
+          Secured access required. Authorized personnel only.
+        </div>
+      </div>
+      
+      <div className="absolute bottom-8 text-[9px] text-white/10 tracking-[0.3em] font-light uppercase">
+        SYSTEM_READY_V2.0
       </div>
     </motion.div>
   );
@@ -1623,12 +1528,14 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
         isOpen={isMoreOpen} 
         onClose={() => setIsMoreOpen(false)} 
         setActivePage={setActivePage} 
-        openRules={() => setIsRulesOpen(true)}
+        setIsRulesOpen={setIsRulesOpen}
         logout={logout}
         user={user}
         displayCurrency={displayCurrency}
         setDisplayCurrency={setDisplayCurrency}
       />
+
+      {isRulesOpen && <EdgeProtocolModal onClose={() => setIsRulesOpen(false)} />}
 
       {/* MT5 Import Modal */}
       {isImportOpen && (
@@ -1988,7 +1895,7 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className="bg-white/[0.03] border border-white/5 rounded-xl p-4 flex items-center justify-between"
+                className={`bg-white/[0.03] border border-white/5 rounded-xl p-4 flex items-center justify-between ${setup.dir === 'Long' ? 'impulse-green' : 'impulse-red'}`}
               >
                 <div className="flex items-center gap-3">
                    <div className="flex flex-col">
@@ -2991,14 +2898,14 @@ function CalculatorPage({ displayCurrency }: { displayCurrency: string }) {
 
     const diff = high - low;
     const levels = [
-      { label: '0.0% (Origin)', value: low },
-      { label: '23.6%', value: high - (diff * 0.764) },
-      { label: '38.2%', value: high - (diff * 0.618) },
+      { label: '0.0% (Peak)', value: high },
+      { label: '23.6%', value: high - (diff * 0.236) },
+      { label: '38.2%', value: high - (diff * 0.382) },
       { label: '50.0% (Equilibrium)', value: high - (diff * 0.5) },
-      { label: '61.8% (Golden Pocket)', value: high - (diff * 0.382) },
-      { label: '78.6%', value: high - (diff * 0.214) },
-      { label: '100% (Target)', value: high },
-      { label: '161.8% (Extension)', value: high + (diff * 0.618) },
+      { label: '61.8% (Golden Pocket)', value: high - (diff * 0.618) },
+      { label: '78.6%', value: high - (diff * 0.786) },
+      { label: '100% (Anchor)', value: low },
+      { label: '161.8% (Extension)', value: low - (diff * 0.618) },
     ];
     return levels;
   }, [fibEntry, fibTarget]);
@@ -3649,8 +3556,8 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
     }
     return null;
   };
-
-  const processParsedData = async (rows: any[], aiMapping?: any) => {
+  const processParsedData = async (rows: any[], aiMapping?: any, fileName: string = '') => {
+    const brokerOffset = 3;
     const validTrades = rows
       .map((row) => {
         const findKey = (keys: string[]) => {
@@ -3714,6 +3621,10 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
         
         const timeMatch = dateStr.match(/(\d{2}):(\d{2}):(\d{2})/) || dateStr.match(/(\d{2}):(\d{2})/);
         const formattedTime = timeMatch ? timeMatch[0] : new Date().toTimeString().slice(0, 5);
+        
+        const hour = parseInt(formattedTime.split(':')[0], 10);
+        const utcHour = (hour - brokerOffset + 24) % 24;
+        const fullDate = `${formattedDate}T${formattedTime}:00Z`;
 
         const sl = slKey ? cleanMoney(row[slKey]) : 0;
         const tp = tpKey ? cleanMoney(row[tpKey]) : 0;
@@ -3732,7 +3643,9 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
           currency: displayCurrency,
           result: profit > 0.0001 ? 'win' : (profit < -0.0001 ? 'loss' : 'be'),
           setup: aiMapping ? 'AI Smart Import' : 'MT5 Import',
-          session: 'London',
+          session: detectSession(utcHour),
+          brokerServerTime: dateStr,
+          utcTime: fullDate,
           emotion: 'Neutral',
           notes: `${row[notesKey!] || ''} (MT5 ticket ${row[ticketKey || ''] || 'N/A'})`.trim(),
           news: 'no',
@@ -3801,7 +3714,7 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
           // Optional: Use AI to help with mapping if user wants or if it's very messy
           // For now, let's try auto-mapping first
           setRawRowsForAI(rawData);
-          processParsedData(rawData);
+          processParsedData(rawData, undefined, file.name);
         } else {
           alert("Could not find headers in Excel file.");
           setIsParsing(false);
@@ -4058,6 +3971,7 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
                     <th className="p-3 w-8"></th>
                     <th className="p-3">Date</th>
                     <th className="p-3">Pair</th>
+                    <th className="p-3">Session</th>
                     <th className="p-3 text-right">Profit</th>
                   </tr>
                 </thead>
@@ -4074,6 +3988,13 @@ function MT5ImportModal({ onClose, onImport, displayCurrency }: { onClose: () =>
                       </td>
                       <td className="p-3 text-spotify-muted font-mono">{t.date}</td>
                       <td className="p-3 font-bold">{t.pair} <span className="opacity-50 mx-1">|</span> {t.dir}</td>
+                      <td className="p-3">
+                        {t.session.split(' / ').map((s: string) => (
+                          <span key={s} className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${s === 'Sydney' ? 'bg-blue-500/20 text-blue-400' : s === 'Tokyo' ? 'bg-purple-500/20 text-purple-400' : s === 'London' ? 'bg-orange-500/20 text-orange-400' : s === 'New York' ? 'bg-spotify-green/20 text-spotify-green' : 'bg-white/5 text-white/50'} mr-1`}>
+                            {s}
+                          </span>
+                        ))}
+                      </td>
                       <td className={`p-3 text-right font-bold ${t.pnl > 0 ? 'text-spotify-green' : 'text-red-500'}`}>
                         {formatCurrency(convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', displayCurrency), displayCurrency)}
                       </td>
