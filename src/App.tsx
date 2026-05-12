@@ -45,7 +45,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { GoogleGenAI } from "@google/genai";
+import Groq from 'groq-sdk';
 import { 
   LineChart, 
   Line, 
@@ -55,7 +55,9 @@ import {
   Tooltip, 
   ResponsiveContainer,
   AreaChart,
-  Area
+  Area,
+  BarChart,
+  Bar
 } from 'recharts';
 import Markdown from 'react-markdown';
 import { PAIR_CONFIG, CURRENCIES, SESSIONS, getCurrentSessions } from './constants';
@@ -884,6 +886,7 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   const [isEditingTrade, setIsEditingTrade] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [filter, setFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -967,16 +970,20 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
     if (isAnalyzing) return;
     setIsAnalyzing(true);
     setAiAnalysis(null);
+    setAnalysisError(null);
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
     if (!apiKey) {
-      console.error("Gemini API Key is missing");
+      console.error("Groq API Key is missing");
       showToast("AI Configuration Error: Missing API Key", "error");
       setIsAnalyzing(false);
       return;
     }
 
-    const ai = new GoogleGenAI({ apiKey });
+    const client = new Groq({
+      apiKey: apiKey,
+      dangerouslyAllowBrowser: true
+    });
     
     const rulesList = [
       "Always check Forex Factory calendar before any trade",
@@ -992,39 +999,45 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
     ];
 
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
-        config: {
-          systemInstruction: "You are an elite institutional trading mentor specializing in SMC (Smart Money Concepts). Your goal is to help the user achieve professional consistency across all asset classes. Be blunt but constructive."
-        },
-        contents: [{ parts: [{ text: `
-          Analyze this trade based on my trading rules and provide actionable insights.
-          
-          TRADING RULES:
-          ${rulesList.map((r, i) => `${i+1}. ${r}`).join('\n')}
-          
-          TRADE DETAILS:
-          - Pair: ${trade.pair}
-          - Direction: ${trade.dir}
-          - Result: ${trade.result}
-          - P&L: ${trade.pnl} ${trade.currency || 'USD'}
-          - Setup: ${trade.setup}
-          - Emotion: ${trade.emotion}
-          - News impact: ${trade.news}
-          - Followed plan: ${trade.plan}
-          - Reason for entry: ${trade.reason}
-          - Notes: ${trade.notes}
-          
-          Please provide:
-          1. Rule Compliance Check: Which rules were followed or broken?
-          2. Performance Insight: What was good or bad about this specific execution?
-          3. Actionable Improvement: One specific thing to do better next time.
-          
-          Keep it professional, concise, and direct (Spotify/minimalist style). Use markdown for structure.
-        ` }] }]
+      const response = await client.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ 
+          role: 'user', 
+          content: `You are an expert trading coach analyzing trades based on Smart Money Concepts (SMC). Be direct and actionable.
+Analyze this trade against these 10 rules:
+1) Trade with HTF trend
+2) Risk max 1% per trade
+3) Always use stop loss
+4) Trade during key sessions only
+5) Wait for confirmation
+6) Trade from key levels only
+7) Follow the trading plan
+8) No revenge trading
+9) Max 3 trades per day
+10) Journal every trade
+
+Return your analysis in this exact format:
+VERDICT: [GOOD TRADE / NEEDS WORK / RULE VIOLATION]
+SCORE: [X/10]
+STRENGTHS: [what was done well]
+WEAKNESSES: [what went wrong]
+RULES BROKEN: [list any broken rules or 'None']
+LESSON: [one actionable takeaway]
+
+TRADE DATA:
+- Instrument: ${trade.pair}
+- Direction: ${trade.dir}
+- Entry: ${trade.entry}
+- Exit: ${trade.exit}
+- P&L: ${trade.pnl} ${trade.currency || 'USD'}
+- Session: ${trade.session}
+- Setup: ${trade.setup}
+- Notes: ${trade.notes}`
+        }],
+        max_tokens: 800
       });
 
-      const text = response.text;
+      const text = response.choices[0]?.message?.content;
       
       if (!text) {
         throw new Error("Empty response from AI");
@@ -1033,6 +1046,7 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
       setAiAnalysis(text);
     } catch (error: any) {
       console.error("AI Analysis Error:", error);
+      setAnalysisError(error.message || 'Unknown error');
       showToast(`AI analysis failed: ${error.message || 'Unknown error'}`, "error");
     } finally {
       setIsAnalyzing(false);
@@ -1637,13 +1651,44 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
                 {isAnalyzing && (
                   <div className="flex flex-col items-center justify-center py-4 gap-3">
                     <Loader2 size={24} className="text-spotify-green animate-spin" />
-                    <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest animate-pulse">Consulting Mentor...</p>
+                    <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest animate-pulse">AI is thinking...</p>
+                  </div>
+                )}
+
+                {analysisError && !isAnalyzing && (
+                  <div className="py-4 flex flex-col items-center gap-3 border border-red-500/20 rounded-lg bg-red-500/5">
+                    <p className="text-xs text-red-500 font-bold">Analysis Failed</p>
+                    <button 
+                      onClick={() => analyzeTrade(selectedTrade)}
+                      className="text-[10px] font-bold text-red-500 border border-red-500/30 px-3 py-1 rounded-full hover:bg-red-500 hover:text-white transition-all"
+                    >
+                      Retry
+                    </button>
                   </div>
                 )}
 
                 {aiAnalysis && (
                   <div className="text-xs text-white/80 leading-relaxed markdown-analysis prose prose-invert max-w-none">
-                    <Markdown>{aiAnalysis}</Markdown>
+                    {(() => {
+                      const verdictMatch = aiAnalysis.match(/VERDICT: \[(.*?)\]/);
+                      const verdict = verdictMatch ? verdictMatch[1] : null;
+                      const verdictColor = verdict === 'GOOD TRADE' ? 'text-green-500' : 
+                                         verdict === 'NEEDS WORK' ? 'text-yellow-500' :
+                                         verdict === 'RULE VIOLATION' ? 'text-red-500' : 'text-white';
+                      
+                      const remainingText = aiAnalysis.replace(/VERDICT: \[.*?\]/, '');
+
+                      return (
+                        <>
+                          {verdict && (
+                            <div className={`font-bold mb-2 ${verdictColor}`}>
+                              VERDICT: {verdict}
+                            </div>
+                          )}
+                          <Markdown>{remainingText}</Markdown>
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
                 
@@ -4925,15 +4970,17 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
     const emotionsMap: any = {};
     trades.forEach((t: any) => {
       const e = t.emotion.split('/')[0].trim();
-      if (!emotionsMap[e]) emotionsMap[e] = { win: 0, total: 0 };
+      if (!emotionsMap[e]) emotionsMap[e] = { win: 0, total: 0, pnl: 0 };
       emotionsMap[e].total++;
+      emotionsMap[e].pnl += convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD');
       if (t.result === 'win') emotionsMap[e].win++;
     });
     const emotionData = Object.entries(emotionsMap).map(([name, data]: any) => ({
       name,
       wr: Math.round(data.win / data.total * 100),
+      pnl: data.pnl,
       count: data.total
-    }));
+    })).sort((a, b) => b.pnl - a.pnl);
 
     // Setup Performance
     const setupsMap: any = {};
@@ -5076,6 +5123,24 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         </div>
       </div>
 
+       {/* Psychology Heatmap */}
+       <div className="bg-spotify-card p-5 md:p-8 rounded-2xl border border-white/5">
+        <div className="mb-8">
+            <h3 className="text-xs font-extrabold uppercase tracking-widest text-spotify-muted mb-1">Psychology Heatmap</h3>
+            <p className="text-sm font-bold text-white/60">P&L distribution across emotional states</p>
+        </div>
+        <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData.emotionData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: 700 }} />
+                <Tooltip contentStyle={{ backgroundColor: '#181818', borderColor: '#333', color: '#fff', fontSize: '12px' }} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+                <Bar dataKey="pnl" name="P&L" fill="#1DB954" radius={[4, 4, 0, 0]} />
+            </BarChart>
+            </ResponsiveContainer>
+        </div>
+      </div>
+      
       {/* Equity Curves Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Session Trend */}
