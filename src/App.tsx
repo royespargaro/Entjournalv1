@@ -40,12 +40,17 @@ import {
   MessageCircle,
   Twitter,
   Send,
-  Copy
+  Copy,
+  AlertTriangle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import Groq from 'groq-sdk';
+import { GoogleGenAI } from "@google/genai";
+import MarketSentiment from './components/MarketSentiment';
+import { AnomalyDetector } from './components/AnomalyDetector';
+import { MonthlyInsightsModal } from './components/MonthlyInsightsModal';
 import { 
   LineChart, 
   Line, 
@@ -878,6 +883,7 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   const [dailySetups, setDailySetups] = useState<DailySetup[]>([]);
   const [dailyGoals, setDailyGoals] = useState<string>('');
   const [activePage, setActivePage] = useState('dashboard');
+  const [showInsights, setShowInsights] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [closingSetup, setClosingSetup] = useState<DailySetup | null>(null);
@@ -886,7 +892,6 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   const [isEditingTrade, setIsEditingTrade] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [filter, setFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -970,7 +975,6 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
     if (isAnalyzing) return;
     setIsAnalyzing(true);
     setAiAnalysis(null);
-    setAnalysisError(null);
 
     const apiKey = import.meta.env.VITE_GROQ_API_KEY;
     if (!apiKey) {
@@ -1003,50 +1007,28 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
         model: 'llama-3.3-70b-versatile',
         messages: [{ 
           role: 'user', 
-          content: `You are an expert trading coach analyzing trades based on Smart Money Concepts (SMC). Be direct and actionable.
-Analyze this trade against these 10 rules:
-1) Trade with HTF trend
-2) Risk max 1% per trade
-3) Always use stop loss
-4) Trade during key sessions only
-5) Wait for confirmation
-6) Trade from key levels only
-7) Follow the trading plan
-8) No revenge trading
-9) Max 3 trades per day
-10) Journal every trade
-
-Return your analysis in this exact format:
-VERDICT: [GOOD TRADE / NEEDS WORK / RULE VIOLATION]
-SCORE: [X/10]
-STRENGTHS: [what was done well]
-WEAKNESSES: [what went wrong]
-RULES BROKEN: [list any broken rules or 'None']
-LESSON: [one actionable takeaway]
-
-TRADE DATA:
-- Instrument: ${trade.pair}
-- Direction: ${trade.dir}
-- Entry: ${trade.entry}
-- Exit: ${trade.exit}
-- P&L: ${trade.pnl} ${trade.currency || 'USD'}
-- Session: ${trade.session}
-- Setup: ${trade.setup}
-- Notes: ${trade.notes}`
+          content: `Act as an elite institutional trading mentor. Analyze this trade based on these rules: ${rulesList.join(', ')}. 
+          Return ONLY a JSON object exactly in this format: 
+          {"ruleCompliance": ["string"], "performanceInsight": "string", "improvementHint": "string"}
+          
+          TRADE DETAILS:
+          - Pair: ${trade.pair}
+          - Result: ${trade.result}
+          - P&L: ${trade.pnl}
+          - Setup: ${trade.setup}
+          - Plan followed: ${trade.plan}`
         }],
-        max_tokens: 800
+        max_tokens: 800,
+        response_format: { type: "json_object" }
       });
 
-      const text = response.choices[0]?.message?.content;
+      const jsonString = response.choices[0]?.message?.content;
+      if (!jsonString) throw new Error("Empty response");
       
-      if (!text) {
-        throw new Error("Empty response from AI");
-      }
-      
-      setAiAnalysis(text);
+      const analysis = JSON.parse(jsonString);
+      setAiAnalysis(`## 📋 Rule Compliance\n${analysis.ruleCompliance.map((r: string) => `- ${r}`).join('\n')}\n\n## 💡 Insight\n${analysis.performanceInsight}\n\n## 🚀 Next Step\n${analysis.improvementHint}`);
     } catch (error: any) {
       console.error("AI Analysis Error:", error);
-      setAnalysisError(error.message || 'Unknown error');
       showToast(`AI analysis failed: ${error.message || 'Unknown error'}`, "error");
     } finally {
       setIsAnalyzing(false);
@@ -1148,7 +1130,41 @@ TRADE DATA:
     };
 
     try {
-      await addDoc(collection(db, tradesPath), normalized);
+      const docRef = await addDoc(collection(db, tradesPath), normalized);
+      
+      (async () => {
+        try {
+          const runAnomalyCheck = async (docRef: any, trade: any, allTrades: any[]) => {
+            const last30 = allTrades.slice(-30);
+            const avgLot = last30.length ? last30.reduce((acc, t) => acc + (t.lot || 0), 0) / last30.length : 0;
+            const avgRR = last30.length ? last30.reduce((acc, t) => acc + (Math.abs((t.tp || 0) - (t.entry || 0)) / Math.abs((t.sl || 0) - (t.entry || 0)) || 1), 0) / last30.length : 1;
+            const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+            if (!apiKey) return;
+            const client = new Groq({ apiKey, dangerouslyAllowBrowser: true });
+            const response = await client.chat.completions.create({
+              model: 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: `Compare this trade to the trader's normal behavior patterns.
+Normal patterns: Avg Lot: ${avgLot.toFixed(2)}, Avg RR: ${avgRR.toFixed(2)}
+This trade: Lot: ${trade.lot}, R:R: ${Math.abs((trade.tp || 0) - (trade.entry || 0)) / Math.abs((trade.sl || 0) - (trade.entry || 0)) || 1}
+
+Does this trade show an anomaly? Examples:
+- Unusually large lot size
+- Trading outside normal session
+- Unusual emotion state
+- Very low R:R compared to average
+
+If anomaly found: return one sentence describing it.
+If no anomaly: return exactly the word NULL`}]
+            });
+            const result = response.choices[0].message.content || 'NULL';
+            if (result !== 'NULL') {
+               await updateDoc(docRef, { anomaly: result });
+            }
+          };
+          await runAnomalyCheck(docRef, normalized, trades);
+        } catch(e) { /* Silent fail */ }
+      })();
+
       showToast('Trade logged successfully');
       setActivePage('history');
     } catch (error) {
@@ -1470,7 +1486,7 @@ TRADE DATA:
               />
             )}
             {activePage === 'log' && (
-              <LogPage onLog={addTrade} displayCurrency={displayCurrency} />
+              <LogPage onLog={addTrade} displayCurrency={displayCurrency} showToast={showToast} />
             )}
             {activePage === 'calculator' && (
               <CalculatorPage displayCurrency={displayCurrency} />
@@ -1504,7 +1520,7 @@ TRADE DATA:
               <AnalyticsPage trades={trades} displayCurrency={displayCurrency} />
             )}
             {activePage === 'review' && (
-              <ReviewPage reviews={reviews} onDeleteReview={deleteReview} />
+              <ReviewPage reviews={reviews} onDeleteReview={deleteReview} trades={trades} />
             )}
             {activePage === 'daily-plan' && (
               <DailyPlanPage 
@@ -1534,8 +1550,11 @@ TRADE DATA:
       <BottomNav 
         activePage={activePage} 
         setActivePage={setActivePage} 
-        openMore={() => setIsMoreOpen(true)} 
+        openMore={() => setIsMoreOpen(true)}
+        onOpenInsights={() => setShowInsights(true)}
       />
+
+      {showInsights && <MonthlyInsightsModal trades={trades} onClose={() => setShowInsights(false)} />}
 
       <MoreMenu 
         isOpen={isMoreOpen} 
@@ -1606,6 +1625,7 @@ TRADE DATA:
               onSubmit={(data: any) => updateTrade(selectedTrade.id, data)}
               buttonLabel="Update Entry"
               displayCurrency={displayCurrency}
+              showToast={showToast}
             />
           ) : (
             <div className="space-y-6">
@@ -1613,12 +1633,22 @@ TRADE DATA:
                 <StatItem label="Date" value={selectedTrade.date} />
                 <StatItem label="Time" value={selectedTrade.time} />
                 <StatItem label="Lot Size" value={selectedTrade.lot} />
-                <StatItem label="Entry" value={formatNum(selectedTrade.entry)} mono />
-                <StatItem label="Exit" value={formatNum(selectedTrade.exit)} mono />
-                <StatItem label="P&L" value={formatCurrency(convertCurrency(cleanMoney(selectedTrade.pnl), selectedTrade.currency || 'USD', displayCurrency), displayCurrency)} color={selectedTrade.pnl >= 0 ? 'text-spotify-green' : 'text-red-500'} bold />
+                <StatItem label="Entry" value={formatNum(selectedTrade.entry || 0)} mono />
+                <StatItem label="Exit" value={formatNum(selectedTrade.exit || 0)} mono />
+                <StatItem label="P&L" value={formatCurrency(convertCurrency(cleanMoney(selectedTrade.pnl || 0), selectedTrade.currency || 'USD', displayCurrency), displayCurrency)} color={selectedTrade.pnl >= 0 ? 'text-spotify-green' : 'text-red-500'} bold />
                 <StatItem label="Result" value={selectedTrade.result.toUpperCase()} />
                 <StatItem label="Setup" value={selectedTrade.setup} />
               </div>
+
+              {selectedTrade.anomaly && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-5 flex items-start gap-3">
+                  <AlertTriangle className="text-amber-500 shrink-0" size={20} />
+                  <div>
+                    <p className="text-sm font-bold text-amber-500">⚠️ Anomaly Detected</p>
+                    <p className="text-sm text-amber-500/80">{selectedTrade.anomaly}</p>
+                  </div>
+                </div>
+              )}
 
               {/* AI Analysis Section */}
               <div className="bg-spotify-green/5 border border-spotify-green/20 rounded-xl p-5 space-y-4">
@@ -1651,44 +1681,13 @@ TRADE DATA:
                 {isAnalyzing && (
                   <div className="flex flex-col items-center justify-center py-4 gap-3">
                     <Loader2 size={24} className="text-spotify-green animate-spin" />
-                    <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest animate-pulse">AI is thinking...</p>
-                  </div>
-                )}
-
-                {analysisError && !isAnalyzing && (
-                  <div className="py-4 flex flex-col items-center gap-3 border border-red-500/20 rounded-lg bg-red-500/5">
-                    <p className="text-xs text-red-500 font-bold">Analysis Failed</p>
-                    <button 
-                      onClick={() => analyzeTrade(selectedTrade)}
-                      className="text-[10px] font-bold text-red-500 border border-red-500/30 px-3 py-1 rounded-full hover:bg-red-500 hover:text-white transition-all"
-                    >
-                      Retry
-                    </button>
+                    <p className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest animate-pulse">Consulting Mentor...</p>
                   </div>
                 )}
 
                 {aiAnalysis && (
                   <div className="text-xs text-white/80 leading-relaxed markdown-analysis prose prose-invert max-w-none">
-                    {(() => {
-                      const verdictMatch = aiAnalysis.match(/VERDICT: \[(.*?)\]/);
-                      const verdict = verdictMatch ? verdictMatch[1] : null;
-                      const verdictColor = verdict === 'GOOD TRADE' ? 'text-green-500' : 
-                                         verdict === 'NEEDS WORK' ? 'text-yellow-500' :
-                                         verdict === 'RULE VIOLATION' ? 'text-red-500' : 'text-white';
-                      
-                      const remainingText = aiAnalysis.replace(/VERDICT: \[.*?\]/, '');
-
-                      return (
-                        <>
-                          {verdict && (
-                            <div className={`font-bold mb-2 ${verdictColor}`}>
-                              VERDICT: {verdict}
-                            </div>
-                          )}
-                          <Markdown>{remainingText}</Markdown>
-                        </>
-                      );
-                    })()}
+                    <Markdown>{aiAnalysis}</Markdown>
                   </div>
                 )}
                 
@@ -1798,7 +1797,7 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
     return { greeting: g, sessionInfo: sessions.filter(s => s.active) };
   }, []);
 
-  const chartData = useMemo(() => {
+  const dashboardChartData = useMemo(() => {
     if (!trades.length) return [];
     const tradesWithUsdPnl = trades.map(t => ({
       ...t,
@@ -1890,6 +1889,9 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
           </div>
         </div>
       </div>
+      <div>
+        <MarketSentiment />
+      </div>
       
       <AnimatePresence>
         <motion.div 
@@ -1973,9 +1975,9 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
           </div>
           
           <div className="h-[250px] md:h-[300px] w-full">
-            {chartData.length > 0 ? (
+            {dashboardChartData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
+                <AreaChart data={dashboardChartData}>
                   <defs>
                     <linearGradient id="colorPnl" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#1DB954" stopOpacity={0.3}/>
@@ -2894,14 +2896,14 @@ function PlanPage({ plan, trades, displayCurrency, onSave, onReset }: any) {
   );
 }
 
-function LogPage({ onLog, displayCurrency }: any) {
+function LogPage({ onLog, displayCurrency, showToast }: any) {
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-4xl font-extrabold tracking-tighter mb-1">Log <span className="italic text-spotify-green">Trade</span></h1>
         <p className="text-xs font-medium text-spotify-muted">Record every detail — precision builds mastery.</p>
       </div>
-      <TradeForm onSubmit={onLog} displayCurrency={displayCurrency} />
+      <TradeForm onSubmit={onLog} displayCurrency={displayCurrency} showToast={showToast} />
     </div>
   );
 }
@@ -3045,11 +3047,95 @@ function CalculatorPage({ displayCurrency }: { displayCurrency: string }) {
   );
 }
 
-function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCurrency }: any) {
+function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCurrency, showToast }: any) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isExpanding, setIsExpanding] = useState(false);
+  const [isTagging, setIsTagging] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isAutoLot, setIsAutoLot] = useState(!initialData);
   const [step, setStep] = useState(1);
+
+  const expandNotes = async () => {
+    if (!form.notes) return;
+    setIsExpanding(true);
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) {
+      if (showToast) showToast("Groq API key missing", "error");
+      setIsExpanding(false);
+      return;
+    }
+
+    const client = new Groq({ apiKey, dangerouslyAllowBrowser: true });
+    try {
+      const response = await client.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ 
+          role: 'user', 
+          content: `Expand this trading note into a structured, professional post-mortem for a trade with these details: ${JSON.stringify(form)}. The note was: "${form.notes}". Keep it concise and insightful.`
+        }]
+      });
+      setForm(prev => ({ ...prev, notes: response.choices[0].message.content || prev.notes }));
+      if (showToast) showToast('Notes expanded');
+    } catch (e) {
+      console.error(e);
+      if (showToast) showToast('Failed to expand notes', 'error');
+    } finally {
+      setIsExpanding(false);
+    }
+  };
+
+  const handleNotesBlur = async (notes: string) => {
+    if (notes.length <= 10) return;
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) return;
+    const client = new Groq({ apiKey, dangerouslyAllowBrowser: true });
+    try {
+      const response = await client.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ 
+          role: 'user', 
+          content: `Extract 3-5 short trading tags from this note.
+Rules: max 8 characters each, trading-specific, no spaces.
+Return ONLY comma-separated tags, nothing else.
+Example output: FVG,MSS,London,OB,LowRisk
+Note: ${notes}`
+        }]
+      });
+      const generatedTagsStr = response.choices[0].message.content || '';
+      const newTags = generatedTagsStr.split(',').map((t: string) => t.trim()).filter(Boolean);
+      setForm(prev => ({ ...prev, tags: [...new Set([...(prev.tags || []), ...newTags])] }));
+    } catch(e) { /* Silent fail */ }
+  };
+
+  const validateSetup = async () => {
+    setIsValidating(true);
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) {
+      if (showToast) showToast("Groq API key missing", "error");
+      setIsValidating(false);
+      return;
+    }
+
+    const client = new Groq({ apiKey, dangerouslyAllowBrowser: true });
+    try {
+      const response = await client.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ 
+          role: 'user', 
+          content: `Act as a trading coach. Analyze the planned entry, stop loss, and take profit for this potential trade: ${JSON.stringify(form)}. Check for: R:R ratio, consistency with common A-Setup criteria. Be blunt and constructive. Provide a short 1-sentence assessment and one improvement hint.`
+        }]
+      });
+      setValidationResult(response.choices[0].message.content || 'Check manual.');
+      if (showToast) showToast('Setup validated');
+    } catch (e) {
+      console.error(e);
+      if (showToast) showToast('Validation failed', 'error');
+    } finally {
+      setIsValidating(false);
+    }
+  };
   
   const defaults = {
     date: new Date().toISOString().split('T')[0],
@@ -3477,12 +3563,17 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
                       <Select label="Market Context" value={form.news} options={[{ label: 'Clear Skies (No News)', value: 'no' }, { label: 'Medium Impact', value: 'med' }, { label: 'High Impact ⚠️', value: 'high' }]} onChange={(v:any) => setForm(prev => ({ ...prev, news: v as any }))} />
                     </div>
                   </div>
-                  <TagInput 
-                   label="Strategy Tags" 
-                   value={form.tags} 
-                   onChange={(tags: string[]) => setForm(prev => ({ ...prev, tags }))} 
-                   placeholder="Scalp, LTF, MSS..." 
-                  />
+                  <div className="space-y-4">
+                    <TagInput 
+                      label="Strategy Tags" 
+                      value={form.tags} 
+                      onChange={(tags: string[]) => setForm(prev => ({ ...prev, tags }))} 
+                      placeholder="Scalp, LTF, MSS..." 
+                    />
+                    <button type="button" onClick={() => handleNotesBlur(form.notes)} className="text-spotify-green hover:text-white flex items-center gap-1 text-[10px] font-bold">
+                        {isTagging ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} AI Smart Tag
+                    </button>
+                  </div>
                 </div>
 
                 <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-8">
@@ -3511,8 +3602,28 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
 
               <div className="bg-spotify-card border border-white/5 p-8 rounded-[2rem] space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <TextArea label="Execution Logic" value={form.reason} onChange={(v:any) => setForm(prev => ({ ...prev, reason: v }))} placeholder="Why did you take this setup? confluences..." />
-                  <TextArea label="Post-Trade Review" value={form.notes} onChange={(v:any) => setForm(prev => ({ ...prev, notes: v }))} placeholder="Key lessons, mistakes, or psychological wins..." />
+                  <div className="space-y-4">
+                    <TextArea label="Execution Logic" value={form.reason} onChange={(v:any) => setForm(prev => ({ ...prev, reason: v }))} placeholder="Why did you take this setup? confluences..." />
+                    <button type="button" onClick={validateSetup} className="text-spotify-green hover:text-white flex items-center gap-1 text-[10px] font-bold">
+                        {isValidating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} AI Validate Setup
+                    </button>
+                    {validationResult && <p className="text-[10px] text-white/50 italic">{validationResult}</p>}
+                  </div>
+                  <div className="space-y-1.5 flex flex-col">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/30 ml-1">Post-Trade Review</label>
+                    <button type="button" onClick={expandNotes} className="text-spotify-green hover:text-white flex items-center gap-1 text-[10px] font-bold">
+                      {isExpanding ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} AI Expand
+                    </button>
+                  </div>
+                  <textarea 
+                    value={form.notes ?? ''} 
+                    placeholder="Key lessons, mistakes, or psychological wins..."
+                    onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))}
+                    onBlur={() => handleNotesBlur(form.notes)}
+                    className="bg-white/5 border border-white/10 rounded-md px-4 py-3 text-sm font-medium text-white outline-none focus:border-spotify-green min-h-[100px] resize-none transition-all"
+                  />
+                </div>
                 </div>
               </div>
 
@@ -4948,7 +5059,7 @@ function CalendarPage({ trades, displayCurrency }: any) {
   );
 }
 function AnalyticsPage({ trades, displayCurrency }: any) {
-  const chartData = useMemo(() => {
+  const analyticsChartData = useMemo(() => {
     if (!trades.length) return null;
     
     // Win rate by session
@@ -4999,7 +5110,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
     })).sort((a, b) => b.pnl - a.pnl);
 
     // Trend Breakdown by Session
-    const sortedTrades = [...trades].sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+    const sortedTrades = [...trades].sort((a: any, b: any) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
     let sessionCurvesUsd: any = { 'Asia': 0, 'London': 0, 'New York': 0 };
     const sessionTrendData = sortedTrades.map((t: any) => {
       if (sessions.includes(t.session)) {
@@ -5072,7 +5183,9 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
     };
   }, [trades]);
 
-  if (!chartData) return <div className="p-20 text-center text-spotify-muted">No data for analytics yet. Log more trades.</div>;
+  if (!analyticsChartData) return <div className="p-20 text-center text-spotify-muted">No data for analytics yet. Log more trades.</div>;
+
+  if (!analyticsChartData) return <div className="p-20 text-center text-spotify-muted">No data for analytics yet. Log more trades.</div>;
 
   const COLORS = ['#1DB954', '#3b82f6', '#f59e0b', '#ec4899', '#8b5cf6'];
 
@@ -5086,12 +5199,12 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Short Win Rate" value={`${chartData.swr}%`} sub={`${chartData.shortsCount} trades`} />
-        <StatCard label="Long Win Rate" value={`${chartData.lwr}%`} sub={`${chartData.longsCount} trades`} />
-        <StatCard label="Avg Risk:Reward" value={`1:${chartData.avgRR}`} sub="Target vs Risk" />
+        <StatCard label="Short Win Rate" value={`${analyticsChartData.swr}%`} sub={`${analyticsChartData.shortsCount} trades`} />
+        <StatCard label="Long Win Rate" value={`${analyticsChartData.lwr}%`} sub={`${analyticsChartData.longsCount} trades`} />
+        <StatCard label="Avg Risk:Reward" value={`1:${analyticsChartData.avgRR}`} sub="Target vs Risk" />
         <StatCard 
           label="Best Session" 
-          value={chartData.sessionData.length > 0 ? [...chartData.sessionData].sort((a:any, b:any) => b.wr - a.wr)[0].name : "None"} 
+          value={analyticsChartData.sessionData.length > 0 ? [...analyticsChartData.sessionData].sort((a:any, b:any) => b.wr - a.wr)[0].name : "None"} 
           sub="Highest Win Rate" 
         />
       </div>
@@ -5100,9 +5213,9 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         <div className="bg-spotify-green/10 border border-spotify-green/20 p-6 rounded-2xl flex items-center justify-between">
           <div>
             <p className="text-[10px] font-black uppercase text-spotify-green tracking-[0.2em] mb-1">Best Winning Trade</p>
-            <p className="text-3xl font-black text-white">{formatCurrency(convertCurrency(chartData.bestTrade?.usdPnl || 0, 'USD', displayCurrency), displayCurrency)}</p>
+            <p className="text-3xl font-black text-white">{formatCurrency(convertCurrency(analyticsChartData.bestTrade?.usdPnl || 0, 'USD', displayCurrency), displayCurrency)}</p>
             <p className="text-[10px] font-bold text-spotify-muted mt-1 uppercase tracking-widest">
-              {chartData.bestTrade ? `${chartData.bestTrade.pair} • ${chartData.bestTrade.date}` : 'No trades yet'}
+              {analyticsChartData.bestTrade ? `${analyticsChartData.bestTrade.pair} • ${analyticsChartData.bestTrade.date}` : 'No trades yet'}
             </p>
           </div>
           <div className="bg-spotify-green p-3 rounded-full text-black">
@@ -5112,9 +5225,9 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-2xl flex items-center justify-between">
           <div>
             <p className="text-[10px] font-black uppercase text-red-500 tracking-[0.2em] mb-1">Worst Losing Trade</p>
-            <p className="text-3xl font-black text-white">{formatCurrency(convertCurrency(chartData.worstTrade?.usdPnl || 0, 'USD', displayCurrency), displayCurrency)}</p>
+            <p className="text-3xl font-black text-white">{formatCurrency(convertCurrency(analyticsChartData.worstTrade?.usdPnl || 0, 'USD', displayCurrency), displayCurrency)}</p>
             <p className="text-[10px] font-bold text-spotify-muted mt-1 uppercase tracking-widest">
-              {chartData.worstTrade ? `${chartData.worstTrade.pair} • ${chartData.worstTrade.date}` : 'No trades yet'}
+              {analyticsChartData.worstTrade ? `${analyticsChartData.worstTrade.pair} • ${analyticsChartData.worstTrade.date}` : 'No trades yet'}
             </p>
           </div>
           <div className="bg-red-500 p-3 rounded-full text-white">
@@ -5131,7 +5244,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         </div>
         <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData.emotionData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+            <BarChart data={analyticsChartData.emotionData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: 700 }} />
                 <Tooltip contentStyle={{ backgroundColor: '#181818', borderColor: '#333', color: '#fff', fontSize: '12px' }} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
@@ -5151,7 +5264,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
           </div>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData.sessionTrendData}>
+              <LineChart data={analyticsChartData.sessionTrendData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis 
                   dataKey="displayDate" 
@@ -5190,7 +5303,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
           </div>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData.setupTrendData}>
+              <LineChart data={analyticsChartData.setupTrendData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis 
                   dataKey="displayDate" 
@@ -5201,14 +5314,14 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
                 />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700 }} />
                 <Tooltip contentStyle={{ backgroundColor: '#121212', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '11px' }} />
-                {chartData.topSetups.map((setup, i) => (
+                {analyticsChartData.topSetups.map((setup, i) => (
                   <Line key={setup} type="monotone" dataKey={setup} stroke={COLORS[i % COLORS.length]} strokeWidth={2} dot={false} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
           <div className="flex flex-wrap justify-center gap-4 mt-4">
-            {chartData.topSetups.map((setup, i) => (
+            {analyticsChartData.topSetups.map((setup, i) => (
               <div key={setup} className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
                 <span className="text-[10px] font-bold text-spotify-muted truncate max-w-[80px]">{setup}</span>
@@ -5222,7 +5335,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         <div className="bg-spotify-card p-8 rounded-2xl">
           <h3 className="text-xs font-extrabold uppercase tracking-widest text-spotify-muted mb-8 text-center">Session Efficiency</h3>
           <div className="space-y-10">
-            {chartData.sessionData.map(s => (
+            {analyticsChartData.sessionData.map(s => (
               <div key={s.name} className="space-y-3">
                 <div className="flex items-end justify-between font-bold">
                   <span className="text-sm tracking-tight capitalize">{s.name}</span>
@@ -5248,7 +5361,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
         <div className="bg-spotify-card p-8 rounded-2xl flex flex-col">
            <h3 className="text-xs font-extrabold uppercase tracking-widest text-spotify-muted mb-8 text-center">Setup Rankings</h3>
            <div className="flex-1 space-y-4">
-              {chartData.setupPerformanceData.slice(0, 4).map((s, idx) => (
+              {analyticsChartData.setupPerformanceData.slice(0, 4).map((s, idx) => (
                 <div key={s.name} className="flex items-center gap-4 bg-white/5 p-4 rounded-xl border border-white/5 hover:border-white/10 transition-all group">
                    <div className="w-10 h-10 rounded-full bg-spotify-black flex items-center justify-center text-spotify-green font-black text-xs">
                       #{idx + 1}
@@ -5268,7 +5381,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
            <div className="mt-8 bg-white/5 p-8 rounded-xl text-center">
               <h4 className="text-[10px] font-extrabold text-spotify-muted uppercase tracking-widest mb-6">News Impact Breakdown</h4>
               <div className="grid grid-cols-3 gap-4">
-                {chartData.newsData.map((n: any) => (
+                {analyticsChartData.newsData.map((n: any) => (
                   <div key={n.name} className="space-y-1">
                     <p className={`text-2xl font-black ${n.value > 0 ? 'text-white' : 'text-white/20'}`}>{n.value}</p>
                     <p className="text-[9px] font-black uppercase tracking-widest text-spotify-muted">{n.name}</p>
@@ -5279,7 +5392,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
            <div className="mt-8 bg-white/5 p-8 rounded-xl text-center">
               <h4 className="text-[10px] font-extrabold text-spotify-muted uppercase tracking-widest mb-4">Win Rate by Emotion</h4>
               <div className="flex flex-wrap justify-center gap-2">
-                {chartData.emotionData.map(e => (
+                {analyticsChartData.emotionData.map(e => (
                   <div key={e.name} className="px-4 py-2 bg-spotify-black rounded-lg border border-white/5">
                     <p className="text-[8px] font-black uppercase text-spotify-muted opacity-50 tracking-widest">{e.name}</p>
                     <p className={`text-lg font-black tracking-tighter ${e.wr >= 50 ? 'text-spotify-green' : 'text-red-500'}`}>{e.wr}%</p>
@@ -5293,12 +5406,66 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
   );
 }
 
-function ReviewPage({ reviews, onDeleteReview }: any) {
+
+function ReviewPage({ reviews, onDeleteReview, trades }: any) {
   const { user, showToast } = useAuth();
   const [form, setForm] = useState({
     week: new Date().toISOString().split('T')[0],
     q1: '', q2: '', q3: '', q4: '', q5: '', q6: ''
   });
+
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<boolean>(false);
+  const [last7DaysTrades, setLast7DaysTrades] = useState<Trade[]>([]);
+
+  const analyzeWeek = async () => {
+    setIsAnalyzing(true);
+    // Find trades from last 7 days
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const dateStr = sevenDaysAgo.toISOString().split('T')[0];
+    
+    const weekTrades = trades.filter(t => t.date >= dateStr);
+    
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) {
+      showToast("Groq AI API key missing", "error");
+      setIsAnalyzing(false);
+      return;
+    }
+
+    const client = new Groq({
+      apiKey: apiKey,
+      dangerouslyAllowBrowser: true
+    });
+
+    try {
+      const response = await client.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ 
+          role: 'user', 
+          content: `Act as an expert trading performance coach. Analyze the last 7 days of trades: ${JSON.stringify(weekTrades)}. Provide: Best trade, worst trade, rules broken, losing patterns, and focus for next week. Output JSON.`
+        }],
+        response_format: { type: 'json_object' }
+      });
+
+      const analysis = JSON.parse(response.choices[0].message.content || '{}');
+      setForm({
+        ...form,
+        q1: analysis.bestTrade || '',
+        q2: analysis.worstTrade || '',
+        q3: analysis.rulesBroken || '',
+        q6: analysis.focusForNextWeek || ''
+      });
+      setAiAnalysisResult(true);
+      showToast('Analysis complete');
+    } catch (e: any) {
+      showToast('Analysis failed', 'error');
+      console.error(e);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!user) return;
@@ -5322,7 +5489,13 @@ function ReviewPage({ reviews, onDeleteReview }: any) {
   };
 
   return (
-    <div className="space-y-12">
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      transition={{ duration: 0.3 }}
+      className="space-y-12"
+    >
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-4xl font-extrabold tracking-tighter mb-1">Weekly <span className="italic text-spotify-green">Review</span></h1>
@@ -5336,21 +5509,48 @@ function ReviewPage({ reviews, onDeleteReview }: any) {
         />
       </div>
 
-      <div className="bg-spotify-card p-6 md:p-10 rounded-3xl space-y-8 shadow-2xl">
-        <ReviewItem label="What was my best trade this week and why did it work?" value={form.q1} onChange={v => setForm({ ...form, q1: v })} placeholder="Architecture of the win..." />
-        <ReviewItem label="What was my worst trade and what did I do wrong?" value={form.q2} onChange={v => setForm({ ...form, q2: v })} placeholder="Total unfiltered truth..." />
-        <ReviewItem label="Which trading rules did I break?" value={form.q3} onChange={v => setForm({ ...form, q3: v })} placeholder="Discipline leakage..." />
-        <ReviewItem label="Weekly focus for improvement next week" value={form.q6} onChange={v => setForm({ ...form, q6: v })} placeholder="One specific mission..." />
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.2, duration: 0.3 }}
+        className="bg-spotify-card p-6 md:p-10 rounded-3xl space-y-8 shadow-2xl relative overflow-hidden"
+      >
+        <div className="absolute top-0 left-0 w-1 h-full bg-spotify-green" />
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-black text-white">Review Inputs</h2>
+          <motion.button 
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={analyzeWeek} 
+            disabled={isAnalyzing}
+            className="flex items-center gap-2 bg-spotify-green text-black px-4 py-2 rounded-full font-bold text-xs hover:bg-white transition-colors disabled:opacity-50"
+          >
+            {isAnalyzing ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+            {isAnalyzing ? 'Analyzing...' : aiAnalysisResult ? 'Regenerate Analysis' : 'AI Analyze My Week'}
+          </motion.button>
+        </div>
+        <div className="space-y-6">
+          <ReviewItem label="What was my best trade this week and why did it work?" value={form.q1} onChange={v => setForm({ ...form, q1: v })} placeholder="Architecture of the win..." />
+          <ReviewItem label="What was my worst trade and what did I do wrong?" value={form.q2} onChange={v => setForm({ ...form, q2: v })} placeholder="Total unfiltered truth..." />
+          <ReviewItem label="Which trading rules did I break?" value={form.q3} onChange={v => setForm({ ...form, q3: v })} placeholder="Discipline leakage..." />
+          <ReviewItem label="Weekly focus for improvement next week" value={form.q6} onChange={v => setForm({ ...form, q6: v })} placeholder="One specific mission..." />
+        </div>
         
         <button onClick={handleSave} className="w-full bg-white text-black font-extrabold uppercase tracking-widest text-sm py-4 rounded-full transition-all hover:scale-[1.01] active:opacity-80">
           Archive Weekly Review
         </button>
-      </div>
+      </motion.div>
 
       <div className="space-y-4">
         <h3 className="text-xs font-extrabold uppercase tracking-[0.2em] text-white/30 text-center">Previous Archives</h3>
-        {reviews.map((r: Review) => (
-          <div key={r.id} className="bg-spotify-card p-6 rounded-xl border border-white/5 opacity-80 hover:opacity-100 transition-opacity relative group">
+        {reviews.map((r: Review, index: number) => (
+          <motion.div 
+            key={r.id} 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 * index }}
+            className="bg-spotify-card p-6 rounded-xl border border-white/5 opacity-80 hover:opacity-100 transition-opacity relative group"
+          >
             <div className="flex justify-between items-center mb-4">
               <span className="text-[10px] font-extrabold uppercase tracking-widest text-spotify-green">Archive {r.week}</span>
               <button 
@@ -5364,10 +5564,10 @@ function ReviewPage({ reviews, onDeleteReview }: any) {
               <p className="text-sm font-bold text-white"><span className="text-spotify-muted font-normal block text-[10px] uppercase tracking-widest mb-1">Weekly Mission</span> {r.q6}</p>
               <p className="text-xs text-spotify-muted leading-relaxed italic">"{r.q1}"</p>
             </div>
-          </div>
+          </motion.div>
         ))}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -5458,7 +5658,7 @@ function StatItem({ label, value, mono, color = 'text-white', bold }: any) {
   return (
     <div>
       <div className="text-[9px] font-extrabold uppercase text-spotify-muted tracking-widest mb-1">{label}</div>
-      <div className={`text-sm ${mono ? 'font-mono' : 'font-bold'} ${color} ${bold ? 'font-extrabold text-lg tracking-tighter' : ''}`}>{value}</div>
+      <div className={`text-sm ${mono ? 'font-mono' : 'font-bold'} ${color} ${bold ? 'font-extrabold text-lg tracking-tighter' : ''}`}>{isNaN(value) ? '—' : value}</div>
     </div>
   );
 }

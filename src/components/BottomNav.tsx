@@ -1,19 +1,20 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { LayoutDashboard, Target, PlusCircle, History, MoreHorizontal } from 'lucide-react';
+import { LayoutDashboard, Target, PlusCircle, History, MoreHorizontal, BarChart3 } from 'lucide-react';
 
 interface BottomNavProps {
   activePage: string;
   setActivePage: (id: string) => void;
   openMore: () => void;
+  onOpenInsights: () => void;
 }
 
-export const BottomNav: React.FC<BottomNavProps> = ({ activePage, setActivePage, openMore }) => {
+export const BottomNav: React.FC<BottomNavProps> = ({ activePage, setActivePage, openMore, onOpenInsights }) => {
   const navItems = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
     { id: 'daily-plan', label: 'War Room', icon: Target },
     { id: 'log', label: 'Log', icon: PlusCircle, isCenter: true },
-    { id: 'history', label: 'History', icon: History },
+    { id: 'insights', label: 'Insights', icon: BarChart3, isAction: true },
     { id: 'more', label: 'Menu', icon: MoreHorizontal, isAction: true },
   ];
 
@@ -43,7 +44,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activePage, setActivePage,
             <button
               key={item.id}
               onClick={() => {
-                if (item.isAction) openMore();
+                if (item.id === 'insights') onOpenInsights();
+                else if (item.isAction) openMore();
                 else setActivePage(item.id);
               }}
               className="relative flex-1 flex flex-col items-center py-3 group min-h-[44px]"
