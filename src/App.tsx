@@ -41,7 +41,8 @@ import {
   Twitter,
   Send,
   Copy,
-  AlertTriangle
+  AlertTriangle,
+  Bell
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -51,6 +52,7 @@ import { GoogleGenAI } from "@google/genai";
 import MarketSentiment from './components/MarketSentiment';
 import { AnomalyDetector } from './components/AnomalyDetector';
 import { MonthlyInsightsModal } from './components/MonthlyInsightsModal';
+import { NotificationSettings } from './components/NotificationSettings';
 import { 
   LineChart, 
   Line, 
@@ -100,13 +102,17 @@ import {
   getDocFromServer,
   writeBatch
 } from 'firebase/firestore';
+import { getMessaging, getToken } from 'firebase/messaging';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const messaging = getMessaging(app);
 export const auth = getAuth(app);
 
 // --- Types ---
+
+const initiateShare = (trade: Trade) => setSharingTrade(trade);
 
 interface Trade {
   id: string;
@@ -447,7 +453,7 @@ const ShareModal = ({ trade, onClose, user, displayCurrency }: any) => {
 
 
 
-const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, logout, user, displayCurrency, setDisplayCurrency }: any) => {
+const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, setIsNotificationsOpen, logout, user, displayCurrency, setDisplayCurrency }: any) => {
   if (!isOpen) return null;
 
   const menuItems = [
@@ -457,6 +463,7 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, logout, user
     { id: 'review', label: 'Weekly Review', icon: BookOpen },
     { id: 'plan', label: 'Trading Plan', icon: Target },
     { id: 'import', label: 'Import MT5', icon: Download },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
   ];
 
   return (
@@ -507,8 +514,13 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, logout, user
                 <button
                   key={item.id}
                   onClick={() => {
-                    setActivePage(item.id);
-                    onClose();
+                    if (item.id === 'notifications') {
+                        setIsNotificationsOpen(true);
+                        onClose();
+                    } else {
+                        setActivePage(item.id);
+                        onClose();
+                    }
                   }}
                   className="w-full flex items-center gap-4 p-4 rounded-[1.25rem] hover:bg-white/5 active:bg-white/10 active:scale-[0.98] transition-all group"
                 >
@@ -618,6 +630,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   
   // --- Share Card State ---
   const [sharingTrade, setSharingTrade] = useState<Trade | null>(null);
@@ -625,16 +638,88 @@ export default function App() {
     return localStorage.getItem('entj_display_currency') || 'USD';
   });
   
-  // --- Onboarding State ---
-  const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('onboarding_completed'));
+  useEffect(() => {
+    if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // --- Notification Scheduler ---
+  useEffect(() => {
+    if (!user) return;
+    
+    // Check notification settings and schedule checks
+    const checkNotifications = async () => {
+        const snap = await getDoc(doc(db, 'users', user.uid, 'settings', 'notifications'));
+        if (!snap.exists()) return;
+        const prefs = snap.data();
+        const now = new Date();
+        const utcHours = now.getUTCHours();
+        const utcMinutes = now.getUTCMinutes();
+        
+        // London 07:00 UTC (15 mins before = 06:45)
+        if (prefs.sessionReminders && utcHours === 6 && utcMinutes === 45) {
+             new Notification("⚡ London Kill Zone", { body: "London Kill Zone opens in 15 minutes." });
+        }
+        // Daily goal check 12:00 UTC
+        if (prefs.dailyGoal && utcHours === 12 && utcMinutes === 0) {
+             // Logic to check if trade logged today?
+             // Skipping complex trade log check for now, simplified
+             new Notification("📋 Daily Goal", { body: "Markets are open — stay consistent." });
+        }
+        // Sunday review 18:00 UTC
+        if (prefs.weeklyReview && now.getUTCDay() === 0 && utcHours === 18 && utcMinutes === 0) {
+             new Notification("📊 Weekly Review", { body: "Sunday review time. Let's find out how the week was." });
+        }
+    };
+
+    const interval = setInterval(checkNotifications, 60000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const checkOnboarding = async () => {
+        const userDoc = await getDocFromServer(doc(db, 'users', user.uid));
+        if (userDoc.exists() && userDoc.data().onboardingComplete) {
+            setShowOnboarding(false);
+        } else {
+            setShowOnboarding(true);
+        }
+    };
+    checkOnboarding();
+  }, [user]);
 
   useEffect(() => {
     localStorage.setItem('entj_display_currency', displayCurrency);
   }, [displayCurrency]);
-  const initiateShare = (trade: Trade) => setSharingTrade(trade);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/firebase-messaging-sw.js')
+        .then(registration => console.log('Service worker registered:', registration))
+        .catch(error => console.error('Service worker registration failed:', error));
+    }
+  }, []);
+
+  async function registerNotificationToken(userId: string) {
+  try {
+    const token = await getToken(messaging, { 
+      vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY 
+    });
+    if (token) {
+      await setDoc(doc(db, 'users', userId), { fcmToken: token }, { merge: true });
+    }
+  } catch (error: any) {
+    if (error?.code === 'messaging/permission-blocked') {
+        console.warn("Notification permission blocked by user.");
+    } else {
+        console.error("Error getting notification token:", error);
+    }
+  }
+}
   
   const finishOnboarding = () => {
-    localStorage.setItem('onboarding_completed', 'true');
     setShowOnboarding(false);
   };
   
@@ -657,6 +742,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
+      if (u) registerNotificationToken(u.uid);
     });
     return () => unsubscribe();
   }, []);
@@ -758,7 +844,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, showToast, loginWithEmail, registerWithEmail, resetPassword }}>
-      {showOnboarding && <OnboardingModal finishOnboarding={finishOnboarding} />}
+      {showOnboarding && user && <OnboardingModal user={user} finishOnboarding={finishOnboarding} />}
       <AnimatePresence mode="wait">
         {!user ? (
           <LoginPage key="login" />
@@ -886,6 +972,7 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   const [showInsights, setShowInsights] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [closingSetup, setClosingSetup] = useState<DailySetup | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -1561,11 +1648,13 @@ If no anomaly: return exactly the word NULL`}]
         onClose={() => setIsMoreOpen(false)} 
         setActivePage={setActivePage} 
         setIsRulesOpen={setIsRulesOpen}
+        setIsNotificationsOpen={setIsNotificationsOpen}
         logout={logout}
         user={user}
         displayCurrency={displayCurrency}
         setDisplayCurrency={setDisplayCurrency}
       />
+      {isNotificationsOpen && user && <NotificationSettings user={user} onClose={() => setIsNotificationsOpen(false)} showToast={showToast} />}
 
       {isRulesOpen && <EdgeProtocolModal onClose={() => setIsRulesOpen(false)} />}
 
@@ -5062,13 +5151,15 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
   const analyticsChartData = useMemo(() => {
     if (!trades.length) return null;
     
+    const sanitize = (val: number) => isNaN(val) || !isFinite(val) ? 0 : val;
+    
     // Win rate by session
     const sessions = ['Asia', 'London', 'New York'];
     const sessionData = sessions.map(s => {
       const ts = trades.filter((t: any) => t.session === s);
       const wr = ts.length ? Math.round(ts.filter((t: any) => t.result === 'win').length / ts.length * 100) : 0;
       const usdPnl = ts.reduce((sum: number, t: any) => sum + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD'), 0);
-      return { name: s, wr, pnl: usdPnl, count: ts.length };
+      return { name: s, wr: sanitize(wr), pnl: sanitize(usdPnl), count: ts.length };
     });
 
     // Win rate by Direction
@@ -5088,8 +5179,8 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
     });
     const emotionData = Object.entries(emotionsMap).map(([name, data]: any) => ({
       name,
-      wr: Math.round(data.win / data.total * 100),
-      pnl: data.pnl,
+      wr: sanitize(Math.round(data.win / data.total * 100)),
+      pnl: sanitize(data.pnl),
       count: data.total
     })).sort((a, b) => b.pnl - a.pnl);
 
@@ -5104,8 +5195,8 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
     });
     const setupPerformanceData = Object.entries(setupsMap).map(([name, data]: any) => ({
       name,
-      wr: Math.round(data.win / data.total * 100),
-      pnl: data.pnl,
+      wr: sanitize(Math.round(data.win / data.total * 100)),
+      pnl: sanitize(data.pnl),
       count: data.total
     })).sort((a, b) => b.pnl - a.pnl);
 
@@ -5118,9 +5209,9 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
       }
       return {
         displayDate: new Date(t.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        Asia: sessionCurvesUsd['Asia'],
-        London: sessionCurvesUsd['London'],
-        'New York': sessionCurvesUsd['New York']
+        Asia: sanitize(sessionCurvesUsd['Asia']),
+        London: sanitize(sessionCurvesUsd['London']),
+        'New York': sanitize(sessionCurvesUsd['New York'])
       };
     });
 
@@ -5134,7 +5225,7 @@ function AnalyticsPage({ trades, displayCurrency }: any) {
       }
       return {
         displayDate: new Date(t.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        ...Object.fromEntries(topSetups.map(s => [s, setupCurvesUsd[s]]))
+        ...Object.fromEntries(topSetups.map(s => [s, sanitize(setupCurvesUsd[s])]))
       };
     });
 
