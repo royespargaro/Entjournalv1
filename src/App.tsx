@@ -32,7 +32,6 @@ import {
   TrendingUp,
   TrendingDown,
   Brain,
-  Shield,
   Clock,
   ArrowRightCircle,
   Play,
@@ -42,7 +41,10 @@ import {
   Send,
   Copy,
   AlertTriangle,
-  Bell
+  Bell,
+  FileText,
+  Shield,
+  ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -53,8 +55,12 @@ import MarketSentiment from './components/MarketSentiment';
 import { AnomalyDetector } from './components/AnomalyDetector';
 import { MonthlyInsightsModal } from './components/MonthlyInsightsModal';
 import { NotificationSettings } from './components/NotificationSettings';
+import { LegalModal } from './components/LegalContent';
+import { ExportModal } from './components/ExportModal';
+import { SetupPicker } from './components/SetupPicker';
+import { exportToPDF } from './utils/exportUtils';
 import { 
-  LineChart, 
+  LineChart,
   Line, 
   XAxis, 
   YAxis, 
@@ -99,6 +105,7 @@ import {
   serverTimestamp, 
   query, 
   orderBy,
+  getDoc,
   getDocFromServer,
   writeBatch
 } from 'firebase/firestore';
@@ -110,37 +117,7 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const messaging = getMessaging(app);
 export const auth = getAuth(app);
 
-// --- Types ---
-
-const initiateShare = (trade: Trade) => setSharingTrade(trade);
-
-interface Trade {
-  id: string;
-  date: string;
-  time: string;
-  pair: string;
-  dir: 'Long' | 'Short';
-  session: string;
-  entry: number;
-  exit: number;
-  sl: number;
-  tp: number;
-  lot: number;
-  pnl: number;
-  currency: string;
-  result: 'win' | 'loss' | 'be';
-  setup: string;
-  emotion: string;
-  news: 'no' | 'med' | 'high';
-  plan: 'yes' | 'no' | 'partial';
-  dur: string;
-  reason: string;
-  notes: string;
-  ss?: string;
-  tags?: string[];
-  createdAt: any;
-  userId: string;
-}
+import { Trade } from './types';
 
 interface DailySetup {
   id: string;
@@ -453,7 +430,7 @@ const ShareModal = ({ trade, onClose, user, displayCurrency }: any) => {
 
 
 
-const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, setIsNotificationsOpen, logout, user, displayCurrency, setDisplayCurrency }: any) => {
+const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, setIsNotificationsOpen, setIsLegalOpen, setLegalType, logout, user, displayCurrency, setDisplayCurrency, trades }: any) => {
   if (!isOpen) return null;
 
   const menuItems = [
@@ -464,6 +441,9 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, setIsNotific
     { id: 'plan', label: 'Trading Plan', icon: Target },
     { id: 'import', label: 'Import MT5', icon: Download },
     { id: 'notifications', label: 'Notifications', icon: Bell },
+    { id: 'export', label: 'Export Data (PDF)', icon: FileText },
+    { id: 'tos', label: 'Terms of Service', icon: Shield },
+    { id: 'privacy', label: 'Privacy Policy', icon: ShieldCheck },
   ];
 
   return (
@@ -514,13 +494,20 @@ const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, setIsNotific
                 <button
                   key={item.id}
                   onClick={() => {
-                    if (item.id === 'notifications') {
+                      if (item.id === 'notifications') {
                         setIsNotificationsOpen(true);
                         onClose();
-                    } else {
+                      } else if (item.id === 'export') {
+                        exportToPDF(trades);
+                        onClose();
+                      } else if (item.id === 'tos' || item.id === 'privacy') {
+                        setLegalType(item.id);
+                        setIsLegalOpen(true);
+                        onClose();
+                      } else {
                         setActivePage(item.id);
                         onClose();
-                    }
+                      }
                   }}
                   className="w-full flex items-center gap-4 p-4 rounded-[1.25rem] hover:bg-white/5 active:bg-white/10 active:scale-[0.98] transition-all group"
                 >
@@ -634,6 +621,7 @@ export default function App() {
   
   // --- Share Card State ---
   const [sharingTrade, setSharingTrade] = useState<Trade | null>(null);
+  const initiateShare = (trade: Trade) => setSharingTrade(trade);
   const [displayCurrency, setDisplayCurrency] = useState<string>(() => {
     return localStorage.getItem('entj_display_currency') || 'USD';
   });
@@ -654,22 +642,29 @@ export default function App() {
         if (!snap.exists()) return;
         const prefs = snap.data();
         const now = new Date();
+        const dateKey = now.toISOString().split('T')[0];
         const utcHours = now.getUTCHours();
         const utcMinutes = now.getUTCMinutes();
         
+        const notify = (key: string, title: string, body: string) => {
+            const storageKey = `notif_${key}_${dateKey}`;
+            if (localStorage.getItem(storageKey)) return;
+            
+            new Notification(title, { body, icon: '/icon-192.png' });
+            localStorage.setItem(storageKey, 'true');
+        };
+        
         // London 07:00 UTC (15 mins before = 06:45)
         if (prefs.sessionReminders && utcHours === 6 && utcMinutes === 45) {
-             new Notification("⚡ London Kill Zone", { body: "London Kill Zone opens in 15 minutes." });
+             notify('sessionReminders', "⚡ London Kill Zone", "London Kill Zone opens in 15 minutes.");
         }
         // Daily goal check 12:00 UTC
         if (prefs.dailyGoal && utcHours === 12 && utcMinutes === 0) {
-             // Logic to check if trade logged today?
-             // Skipping complex trade log check for now, simplified
-             new Notification("📋 Daily Goal", { body: "Markets are open — stay consistent." });
+             notify('dailyGoal', "📋 Daily Goal", "Markets are open — stay consistent.");
         }
         // Sunday review 18:00 UTC
         if (prefs.weeklyReview && now.getUTCDay() === 0 && utcHours === 18 && utcMinutes === 0) {
-             new Notification("📊 Weekly Review", { body: "Sunday review time. Let's find out how the week was." });
+             notify('weeklyReview', "📊 Weekly Review", "Sunday review time. Let's find out how the week was.");
         }
     };
 
@@ -973,6 +968,9 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isLegalOpen, setIsLegalOpen] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const [legalType, setLegalType] = useState<'tos' | 'privacy'>('tos');
   const [closingSetup, setClosingSetup] = useState<DailySetup | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -1592,6 +1590,7 @@ If no anomaly: return exactly the word NULL`}]
                 onBulkDelete={deleteMultipleTrades}
                 onBulkUpdate={updateMultipleTrades}
                 onImportOpen={() => setIsImportOpen(true)}
+                onExportOpen={() => setIsExportOpen(true)}
                 displayCurrency={displayCurrency}
                 setIsEditingTrade={setIsEditingTrade}
                 onShareTrade={onShareTrade}
@@ -1641,7 +1640,7 @@ If no anomaly: return exactly the word NULL`}]
         onOpenInsights={() => setShowInsights(true)}
       />
 
-      {showInsights && <MonthlyInsightsModal trades={trades} onClose={() => setShowInsights(false)} />}
+      {showInsights && <MonthlyInsightsModal trades={trades.map(t => ({ id: t.id, date: t.date, profit: t.pnl, setup: t.setup }))} onClose={() => setShowInsights(false)} />}
 
       <MoreMenu 
         isOpen={isMoreOpen} 
@@ -1649,12 +1648,18 @@ If no anomaly: return exactly the word NULL`}]
         setActivePage={setActivePage} 
         setIsRulesOpen={setIsRulesOpen}
         setIsNotificationsOpen={setIsNotificationsOpen}
+        setIsExportOpen={setIsExportOpen}
+        setIsLegalOpen={setIsLegalOpen}
+        setLegalType={setLegalType}
         logout={logout}
         user={user}
         displayCurrency={displayCurrency}
         setDisplayCurrency={setDisplayCurrency}
+        trades={trades}
       />
       {isNotificationsOpen && user && <NotificationSettings user={user} onClose={() => setIsNotificationsOpen(false)} showToast={showToast} />}
+      {isExportOpen && <ExportModal onClose={() => setIsExportOpen(false)} trades={trades} user={user} />}
+      {isLegalOpen && <LegalModal onClose={() => setIsLegalOpen(false)} type={legalType} />}
 
       {isRulesOpen && <EdgeProtocolModal onClose={() => setIsRulesOpen(false)} />}
 
@@ -3141,6 +3146,7 @@ function TradeForm({ initialData, onSubmit, buttonLabel = "Log Trade", displayCu
   const [isExpanding, setIsExpanding] = useState(false);
   const [isTagging, setIsTagging] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
+  const [isSetupPickerOpen, setIsSetupPickerOpen] = useState(false);
   const [validationResult, setValidationResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isAutoLot, setIsAutoLot] = useState(!initialData);
@@ -3492,6 +3498,15 @@ Note: ${notes}`
                         <Select label="Pair" value={form.pair} options={Object.keys(PAIR_CONFIG)} onChange={(v:any) => setForm(prev => ({ ...prev, pair: v }))} />
                         <Select label="Direction" value={form.dir} options={['Short', 'Long']} onChange={(v:any) => setForm(prev => ({ ...prev, dir: v as any }))} />
                       </div>
+                      <div className="grid grid-cols-1 gap-4">
+                           <div className="space-y-1">
+                               <div className="flex justify-between items-center">
+                                   <label className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-white/30 ml-1">Setup</label>
+                                   <button type="button" onClick={() => setIsSetupPickerOpen(true)} className="text-spotify-green hover:text-white text-[10px] font-bold">Pick Setup</button>
+                               </div>
+                               <input type="text" value={form.setup} onChange={(e) => setForm(prev => ({ ...prev, setup: e.target.value }))} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-sm focus:border-spotify-green transition-colors outline-none text-white" />
+                           </div>
+                      </div>
                       <div className="grid grid-cols-2 gap-4">
                         <Input label="Entry Price" type="number" step="0.00001" placeholder="0.00000" value={form.entry} onChange={(v:any) => setForm(prev => ({ ...prev, entry: v }))} />
                         <Input label="Stop Loss" type="number" step="0.00001" placeholder="0.00000" value={form.sl} onChange={(v:any) => setForm(prev => ({ ...prev, sl: v }))} />
@@ -3740,6 +3755,20 @@ Note: ${notes}`
           )}
         </AnimatePresence>
       </form>
+      {isSetupPickerOpen && (
+        <SetupPicker 
+          isOpen={isSetupPickerOpen} 
+          onClose={() => setIsSetupPickerOpen(false)} 
+          onSelect={(setup, tags) => {
+            setForm(prev => ({
+              ...prev,
+              setup,
+              tags: [...new Set([...prev.tags, ...tags])]
+            }));
+            setIsSetupPickerOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -4693,7 +4722,7 @@ function HabitsPage({ trades, displayCurrency }: any) {
   );
 }
 
-function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDate, setEndDate, onTradeClick, onDelete, onBulkDelete, onBulkUpdate, onImportOpen, displayCurrency, setIsEditingTrade, onShareTrade }: any) {
+function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDate, setEndDate, onTradeClick, onDelete, onBulkDelete, onBulkUpdate, onImportOpen, onExportOpen, displayCurrency, setIsEditingTrade, onShareTrade }: any) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [search, setSearch] = useState('');

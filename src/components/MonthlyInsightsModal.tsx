@@ -3,14 +3,14 @@ import Groq from 'groq-sdk';
 import { Loader2, Sparkles, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-interface Trade {
+interface ModalTrade {
   id: string;
   date: string;
   profit: number;
   setup: string;
 }
 
-export const MonthlyInsightsModal = ({ trades, onClose }: { trades: Trade[], onClose: () => void }) => {
+export const MonthlyInsightsModal = ({ trades, onClose }: { trades: ModalTrade[], onClose: () => void }) => {
   const [insights, setInsights] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 

@@ -15,7 +15,7 @@ export const AnomalyDetector = ({ trades }: { trades: any[] }) => {
         return acc;
     }, {} as Record<string, number>);
     
-    if(Object.values(dailyLosses).some(loss => loss > 100)) { // Assuming 100 is a significant daily loss
+    if(Object.values(dailyLosses).some((loss: number) => loss > 100)) { // Assuming 100 is a significant daily loss
         anomaliesFound.push(`You had sessions with significant losses (>$100). Consider taking a break when daily limit hit.`);
     }
 

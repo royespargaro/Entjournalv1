@@ -7,7 +7,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 interface NotificationSettingsProps {
   user: any;
   onClose: () => void;
-  showToast: (msg: string) => void;
+  showToast: (msg: string, type?: 'success' | 'error') => void;
 }
 
 export const NotificationSettings: React.FC<NotificationSettingsProps> = ({ user, onClose, showToast }) => {

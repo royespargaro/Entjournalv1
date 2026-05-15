@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Brain, X, ChevronRight, ChevronLeft } from 'lucide-react';
 import { db } from '../App';
-import { doc, setDoc, serverTimestamp, User } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { User } from 'firebase/auth';
 
 interface OnboardingModalProps {
   finishOnboarding: () => void;

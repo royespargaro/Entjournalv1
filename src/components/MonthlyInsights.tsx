@@ -3,14 +3,14 @@ import Groq from 'groq-sdk';
 import { Loader2, Sparkles, BarChart3 } from 'lucide-react';
 import { motion } from 'motion/react';
 
-interface Trade {
+interface MonthlyTrade {
   id: string;
   date: string;
   profit: number;
   setup: string;
 }
 
-const MonthlyInsights = ({ trades }: { trades: Trade[] }) => {
+const MonthlyInsights = ({ trades }: { trades: MonthlyTrade[] }) => {
   const [insights, setInsights] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
