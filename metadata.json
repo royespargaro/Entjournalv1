@@ -1,8 +1,5 @@
-import firebaseRulesPlugin from '@firebase/eslint-plugin-security-rules';
-
-export default [
-  {
-    ignores: ['dist/**/*']
-  },
-  firebaseRulesPlugin.configs['flat/recommended']
-];
+{
+  "name": "ENTJ Trading Journal",
+  "description": "Professional-grade XAUUSD trading journal with P&L tracking, calendar views, and performance analytics.",
+  "requestFramePermissions": []
+}
