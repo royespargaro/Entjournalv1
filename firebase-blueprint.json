@@ -1,132 +1,21 @@
-{
-  "entities": {
-    "Trade": {
-      "title": "Trade",
-      "description": "A recorded trading position",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string", "description": "The UID of the owner" },
-        "date": { "type": "string", "format": "date" },
-        "time": { "type": "string" },
-        "pair": { "type": "string" },
-        "dir": { "type": "string", "enum": ["Long", "Short"] },
-        "session": { "type": "string", "enum": ["Asia", "London", "New York"] },
-        "entry": { "type": "number" },
-        "exit": { "type": "number" },
-        "sl": { "type": "number" },
-        "tp": { "type": "number" },
-        "lot": { "type": "number" },
-        "pnl": { "type": "number" },
-        "result": { "type": "string", "enum": ["win", "loss", "be"] },
-        "setup": { "type": "string" },
-        "emotion": { "type": "string" },
-        "news": { "type": "string", "enum": ["no", "med", "high"] },
-        "plan": { "type": "string", "enum": ["yes", "no", "partial"] },
-        "dur": { "type": "string" },
-        "reason": { "type": "string" },
-        "notes": { "type": "string" },
-        "ss": { "type": "string", "description": "Base64 or URL of chart screenshot" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "date", "pair", "dir", "entry", "exit", "pnl", "result"]
-    },
-    "Review": {
-      "title": "Weekly Review",
-      "description": "A weekly performance reflection",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string" },
-        "week": { "type": "string", "format": "date" },
-        "q1": { "type": "string" },
-        "q2": { "type": "string" },
-        "q3": { "type": "string" },
-        "q4": { "type": "string" },
-        "q5": { "type": "string" },
-        "q6": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "week"]
-    },
-    "UserProfile": {
-      "title": "User Profile",
-      "description": "User specific settings and info",
-      "type": "object",
-      "properties": {
-        "displayName": { "type": "string" },
-        "email": { "type": "string" },
-        "photoURL": { "type": "string" },
-        "tradingMethod": { "type": "string" }
-      }
-    },
-    "TradingPlan": {
-      "title": "Trading Plan",
-      "description": "User's financial goals and targets",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string" },
-        "yearlyTarget": { "type": "number" },
-        "monthlyTarget": { "type": "number" },
-        "weeklyTarget": { "type": "number" },
-        "dailyTarget": { "type": "number" },
-        "currency": { "type": "string" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "yearlyTarget"]
-    },
-    "DailySetup": {
-      "title": "Daily Setup",
-      "description": "A planned trading setup in the war room",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "pair": { "type": "string" },
-        "dir": { "type": "string", "enum": ["Long", "Short"] },
-        "entry": { "type": "number" },
-        "sl": { "type": "number" },
-        "tp": { "type": "number" },
-        "notes": { "type": "string" },
-        "status": { "type": "string", "enum": ["planned", "active"] },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "userId": { "type": "string" }
-      },
-      "required": ["pair", "dir", "entry", "sl", "tp", "status", "userId"]
-    },
-    "DailyGoals": {
-      "title": "Daily Goals",
-      "description": "Trader's intentions for the day",
-      "type": "object",
-      "properties": {
-        "goals": { "type": "string" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["goals"]
-    }
-  },
-  "firestore": {
-    "users/{userId}": {
-      "schema": "UserProfile",
-      "description": "User profile data"
-    },
-    "users/{userId}/plan/current": {
-      "schema": "TradingPlan",
-      "description": "Current trading plan and targets"
-    },
-    "users/{userId}/trades/{tradeId}": {
-      "schema": "Trade",
-      "description": "Individual trades for a user"
-    },
-    "users/{userId}/reviews/{reviewId}": {
-      "schema": "Review",
-      "description": "Weekly reviews for a user"
-    },
-    "users/{userId}/dailySetups/{setupId}": {
-      "schema": "DailySetup",
-      "description": "Planned setups for the daily war room"
-    },
-    "users/{userId}/settings/dailyGoals": {
-      "schema": "DailyGoals",
-      "description": "Daily focus and goals"
-    }
-  }
-}
+import { Trade } from '../types';
+
+export const calculateStats = (trades: Trade[]) => {
+    const tradeEntries = trades.filter(t => t.type === 'trade');
+    const grossProfit = tradeEntries.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0);
+    const grossLoss = tradeEntries.filter(t => t.pnl < 0).reduce((sum, t) => sum + Math.abs(t.pnl), 0);
+    const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
+
+    return {
+        totalPnL,
+        winRate: tradeEntries.length > 0 ? (tradeEntries.filter(t => t.result === 'WIN').length / tradeEntries.length) * 100 : 0,
+        profitFactor: grossLoss > 0 ? grossProfit / grossLoss : 0,
+        avgRR: tradeEntries.length > 0 ? (tradeEntries.reduce((sum, t) => sum + (t.riskReward || 0), 0) / tradeEntries.length) : 0,
+        bestTrade: tradeEntries.length > 0 ? tradeEntries.reduce((max, t) => (t.pnl > max.pnl) ? t : max, tradeEntries[0]) : null,
+        worstTrade: tradeEntries.length > 0 ? tradeEntries.reduce((min, t) => (t.pnl < min.pnl) ? t : min, tradeEntries[0]) : null,
+        totalEntries: trades.length,
+        tradeCount: tradeEntries.length,
+        recapCount: trades.filter(t => t.type === 'recap').length,
+        importCount: trades.filter(t => t.type === 'import').length
+    };
+};

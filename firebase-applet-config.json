@@ -1,10 +1,13 @@
-{
-  "projectId": "gen-lang-client-0160390188",
-  "appId": "1:768532879814:web:16f49bf54d62777e193ac7",
-  "apiKey": "AIzaSyAyOh78twRX01bqRu_pNYBTLGft2Hv59Xc",
-  "authDomain": "gen-lang-client-0160390188.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-8ff91adc-e0f6-4964-b547-5c12a8fdb22c",
-  "storageBucket": "gen-lang-client-0160390188.firebasestorage.app",
-  "messagingSenderId": "768532879814",
-  "measurementId": ""
-}
+import { Trade } from '../types';
+
+export const evaluateHabits = (trades: Trade[], userId: string) => {
+    const today = new Date().toISOString().split('T')[0];
+    const userTrades = trades.filter(t => t.userId === userId);
+    const todayTrades = userTrades.filter(t => t.date === today);
+
+    // Placeholder for habit evaluation logic
+    return [
+        { id: 'log-trade', name: 'Log every trade', satisfied: todayTrades.length > 0 },
+        // ... add more rules
+    ];
+};
