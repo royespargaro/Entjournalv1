@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { X, FileText, FileSpreadsheet, Database } from 'lucide-react';
 import { exportToPDF, exportToCSV, exportToJSON } from '../utils/exportUtils';
 
-export const ExportModal = ({ onClose, trades, user }: { onClose: () => void, trades: any[], user: any }) => {
+export const ExportModal = ({ onClose, trades, user, stats }: { onClose: () => void, trades: any[], user: any, stats: any }) => {
   return (
     <motion.div 
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -16,7 +16,7 @@ export const ExportModal = ({ onClose, trades, user }: { onClose: () => void, tr
         </div>
         
         <div className="space-y-3">
-            <button onClick={() => { exportToPDF(trades, user?.displayName || 'Trader', 'All Time', 'equity-curve-chart'); onClose(); }} className="w-full bg-white/5 hover:bg-white/10 text-white p-4 rounded-2xl flex items-center gap-3">
+            <button onClick={() => { exportToPDF(trades, user?.displayName || 'Trader', 'All Time', stats, 'equity-curve-chart'); onClose(); }} className="w-full bg-white/5 hover:bg-white/10 text-white p-4 rounded-2xl flex items-center gap-3">
                 <FileText className="text-spotify-green"/> PDF Report
             </button>
             <button onClick={() => { exportToCSV(trades); onClose(); }} className="w-full bg-white/5 hover:bg-white/10 text-white p-4 rounded-2xl flex items-center gap-3">
