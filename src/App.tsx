@@ -51,13 +51,14 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import Groq from 'groq-sdk';
 import { GoogleGenAI } from "@google/genai";
-import MarketSentiment from './components/MarketSentiment';
+import KillZoneTicker from './components/KillZoneTicker';
 import { AnomalyDetector } from './components/AnomalyDetector';
 import { MonthlyInsightsModal } from './components/MonthlyInsightsModal';
 import { NotificationSettings } from './components/NotificationSettings';
 import { LegalModal } from './components/LegalContent';
 import { ExportModal } from './components/ExportModal';
 import { SetupPicker } from './components/SetupPicker';
+import { MoreMenu } from './components/MoreMenu';
 import { exportToPDF } from './utils/exportUtils';
 import { 
   LineChart,
@@ -222,7 +223,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 const ShareCard = ({ trade, user, displayCurrency }: { trade: Trade, user: User | null, displayCurrency: string }) => {
-  const isWin = trade.result === 'win';
+  const isWin = trade.result === 'WIN';
   const pnl = cleanMoney(trade.pnl);
   const pnlFormatted = formatCurrency(convertCurrency(pnl, trade.currency || 'USD', displayCurrency), displayCurrency);
   const accent = isWin ? '#00C853' : '#ff6b6b';
@@ -430,150 +431,6 @@ const ShareModal = ({ trade, onClose, user, displayCurrency }: any) => {
 
 
 
-const MoreMenu = ({ isOpen, onClose, setActivePage, setIsRulesOpen, setIsNotificationsOpen, setIsLegalOpen, setLegalType, logout, user, displayCurrency, setDisplayCurrency, trades }: any) => {
-  if (!isOpen) return null;
-
-  const menuItems = [
-    { id: 'calculator', label: 'FX & Fib Calc', icon: Zap },
-    { id: 'analytics', label: 'Full Analytics', icon: BarChart3 },
-    { id: 'habits', label: 'Trader Habits', icon: Brain },
-    { id: 'review', label: 'Weekly Review', icon: BookOpen },
-    { id: 'plan', label: 'Trading Plan', icon: Target },
-    { id: 'import', label: 'Import MT5', icon: Download },
-    { id: 'notifications', label: 'Notifications', icon: Bell },
-    { id: 'export', label: 'Export Data (PDF)', icon: FileText },
-    { id: 'tos', label: 'Terms of Service', icon: Shield },
-    { id: 'privacy', label: 'Privacy Policy', icon: ShieldCheck },
-  ];
-
-  return (
-    <AnimatePresence>
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[110] flex items-end sm:items-center justify-center p-4"
-      >
-        <motion.div 
-          initial={{ y: 100, scale: 0.95 }}
-          animate={{ y: 0, scale: 1 }}
-          exit={{ y: 100, scale: 0.95 }}
-          onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-sm bg-spotify-card border border-white/10 rounded-3xl overflow-hidden shadow-2xl"
-        >
-          <div className="p-6 border-b border-white/5 space-y-4">
-            <div className="flex items-center gap-4">
-              {user?.photoURL ? (
-                <img src={user.photoURL} className="w-10 h-10 rounded-full border border-white/10" />
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-spotify-green flex items-center justify-center">
-                  <UserIcon size={20} className="text-black" />
-                </div>
-              )}
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-black text-white">{user?.displayName || 'Trader'}</p>
-                  <span className="px-1.5 py-0.5 rounded bg-spotify-green/10 text-spotify-green text-[7px] font-black uppercase tracking-widest border border-spotify-green/20">Free Plan</span>
-                </div>
-                <button onClick={logout} className="text-[10px] font-bold text-red-500 uppercase tracking-widest hover:text-red-400 transition-colors">Sign Out</button>
-              </div>
-              <button 
-                onClick={onClose}
-                className="p-2 text-spotify-muted hover:text-white bg-white/5 rounded-full"
-              >
-                <X size={20} />
-              </button>
-            </div>
-          </div>
-
-          <div className="p-4 space-y-2">
-            {menuItems.map(item => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                      if (item.id === 'notifications') {
-                        setIsNotificationsOpen(true);
-                        onClose();
-                      } else if (item.id === 'export') {
-                        exportToPDF(trades);
-                        onClose();
-                      } else if (item.id === 'tos' || item.id === 'privacy') {
-                        setLegalType(item.id);
-                        setIsLegalOpen(true);
-                        onClose();
-                      } else {
-                        setActivePage(item.id);
-                        onClose();
-                      }
-                  }}
-                  className="w-full flex items-center gap-4 p-4 rounded-[1.25rem] hover:bg-white/5 active:bg-white/10 active:scale-[0.98] transition-all group"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-spotify-muted group-hover:text-spotify-green group-hover:bg-spotify-green/10 transition-all">
-                    <Icon size={20} />
-                  </div>
-                  <span className="text-sm font-bold text-white/80 group-hover:text-white">{item.label}</span>
-                  <div className="ml-auto opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all">
-                    <ChevronRight size={14} className="text-spotify-green" />
-                  </div>
-                </button>
-              );
-            })}
-            
-            <button
-              onClick={() => {
-                setActivePage('calendar');
-                onClose();
-              }}
-              className="w-full flex items-center gap-4 p-4 rounded-[1.25rem] hover:bg-white/5 active:bg-white/10 active:scale-[0.98] transition-all group"
-            >
-              <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-spotify-muted group-hover:text-spotify-green group-hover:bg-spotify-green/10 transition-all">
-                <CalendarIcon size={20} />
-              </div>
-              <span className="text-sm font-bold text-white/80 group-hover:text-white">P&L Calendar</span>
-              <div className="ml-auto opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all">
-                <ChevronRight size={14} className="text-spotify-green" />
-              </div>
-            </button>
-          </div>
-
-          <div className="p-4 border-t border-white/5 space-y-3">
-            <div className="relative">
-              <select
-                value={displayCurrency}
-                onChange={(e) => setDisplayCurrency(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 px-4 text-[10px] font-black uppercase tracking-widest text-white appearance-none cursor-pointer hover:bg-white/10 transition-all outline-none"
-              >
-                {Object.keys(CURRENCIES).map(curr => (
-                  <option key={curr} value={curr} className="bg-spotify-darker text-white">
-                    {curr} ({CURRENCIES[curr as keyof typeof CURRENCIES].symbol})
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-spotify-muted/50">
-                <ChevronRight size={12} className="rotate-90" />
-              </div>
-            </div>
-
-            <button 
-              onClick={() => {
-                setIsRulesOpen(true);
-                onClose();
-              }}
-              className="w-full flex items-center justify-center gap-2 bg-spotify-green/10 border border-spotify-green/20 rounded-2xl py-4 text-[10px] font-black tracking-[0.2em] uppercase text-spotify-green hover:bg-spotify-green hover:text-black transition-all duration-300"
-            >
-              <Sparkles size={14} />
-              Edge Protocol
-            </button>
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
-  );
-};
-
 const Sidebar = ({ activePage, setActivePage, openRules, isMobileMenuOpen, setIsMobileMenuOpen, displayCurrency, setDisplayCurrency }: any) => {
   return null; // Sidebars are so 2024. We use Bottom Docks now.
 };
@@ -619,7 +476,6 @@ export default function App() {
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   
-  // --- Share Card State ---
   const [sharingTrade, setSharingTrade] = useState<Trade | null>(null);
   const initiateShare = (trade: Trade) => setSharingTrade(trade);
   const [displayCurrency, setDisplayCurrency] = useState<string>(() => {
@@ -852,14 +708,8 @@ export default function App() {
           />
         )}
       </AnimatePresence>
-      {sharingTrade && (
-        <ShareModal 
-          trade={sharingTrade} 
-          onClose={() => setSharingTrade(null)} 
-          user={user} 
-          displayCurrency={displayCurrency} 
-        />
-      )}
+      {/* ... Previous Share Modal ... */}
+      
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -964,6 +814,7 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   const [dailySetups, setDailySetups] = useState<DailySetup[]>([]);
   const [dailyGoals, setDailyGoals] = useState<string>('');
   const [activePage, setActivePage] = useState('dashboard');
+  const [activeLogTab, setActiveLogTab] = useState('log-trade');
   const [showInsights, setShowInsights] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
@@ -989,18 +840,75 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
     const tradesPath = `users/${user.uid}/trades`;
     const qTrades = query(collection(db, tradesPath), orderBy('date', 'desc'));
     const unsubscribeTrades = onSnapshot(qTrades, (snapshot) => {
-      const dbTrades = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Trade));
+      const dbTrades = snapshot.docs.map(doc => normalizeTrade({ ...doc.data(), id: doc.id }));
       setTrades(prev => {
         const tempTrades = prev.filter(t => t.id.startsWith('temp-'));
         return [...tempTrades, ...dbTrades].sort((a, b) => {
           const dateComp = b.date.localeCompare(a.date);
           if (dateComp !== 0) return dateComp;
-          return (b.time || '').localeCompare(a.time || '');
+          // fall back to time if available, otherwise just use id to maintain stable sort
+          return (b.id || '').localeCompare(a.id || '');
         });
       });
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, tradesPath);
     });
+
+    const normalizeTrade = (data: any): Trade => {
+        const symbol = data.symbol || data.pair || null;
+        const direction = data.direction || (data.dir === 'Long' ? 'Long' : data.dir === 'Short' ? 'Short' : null);
+        const entryPrice = Number(data.entryPrice || data.entry || 0);
+        const exitPrice = Number(data.exitPrice || data.exit || 0);
+        const stopLoss = Number(data.stopLoss || data.sl || 0);
+        const takeProfit = Number(data.takeProfit || data.tp || 0);
+        const lotSize = Number(data.lotSize || data.lot || 0);
+        const result = data.result ? (data.result.toLowerCase() === 'win' ? 'WIN' : data.result.toLowerCase() === 'loss' ? 'LOSS' : data.result.toUpperCase() === 'BREAKEVEN' ? 'BREAKEVEN' : null) : null;
+
+        return {
+            id: data.id,
+            userId: data.userId || '',
+            type: data.type || (data.entryPrice !== undefined || data.entry !== undefined ? 'trade' : 'recap'),
+            date: data.date || '',
+            createdAt: data.createdAt || null,
+            pnl: Number(data.pnl || 0),
+            session: data.session || 'Unknown',
+            killZone: data.killZone || 'None',
+            emotion: data.emotion || 'Calm',
+            notes: data.notes || '',
+            tags: data.tags || [],
+            symbol: symbol,
+            direction: direction,
+            entryPrice: entryPrice,
+            exitPrice: exitPrice,
+            stopLoss: stopLoss,
+            takeProfit: takeProfit,
+            lotSize: lotSize,
+            setup: data.setup || null,
+            riskReward: Number(data.riskReward || 0),
+            result: result,
+            recapSummary: data.recapSummary || null,
+            tradeCount: Number(data.tradeCount || 0),
+            wins: Number(data.wins || 0),
+            losses: Number(data.losses || 0),
+            // Legacy mapping
+            pair: symbol,
+            dir: direction,
+            entry: entryPrice,
+            exit: exitPrice,
+            sl: stopLoss,
+            tp: takeProfit,
+            lot: lotSize,
+            currency: data.currency || 'USD',
+            plan: data.plan || 'no',
+            news: data.news || 'no',
+            dur: data.dur || '',
+            reason: data.reason || '',
+            ss: data.ss || '',
+            anomaly: data.anomaly || '',
+            time: data.time || ''
+        };
+    };
+
 
     const reviewsPath = `users/${user.uid}/reviews`;
     const qReviews = query(collection(db, reviewsPath), orderBy('week', 'desc'));
@@ -1123,10 +1031,10 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
   // --- Calculations ---
   const stats = useMemo(() => {
     const n = trades.length;
-    const wins = trades.filter(t => t.result === 'win').length;
-    const losses = trades.filter(t => t.result === 'loss').length;
+    const wins = trades.filter(t => t.result === 'WIN').length;
+    const losses = trades.filter(t => t.result === 'LOSS').length;
     const planFollowed = trades.filter(t => t.plan === 'yes').length;
-    const newsSlHits = trades.filter(t => t.news !== 'no' && t.result === 'loss').length;
+    const newsSlHits = trades.filter(t => t.news !== 'no' && t.result === 'LOSS').length;
     
     // Normalize all P&L to USD for internal stats
     const tradesWithUsdPnl = trades.map(t => ({
@@ -1201,17 +1109,36 @@ function JournalApp({ onShareTrade, displayCurrency, setDisplayCurrency }: { onS
     if (!user) return;
     const tradesPath = `users/${user.uid}/trades`;
     
-    // Normalize data for Firestore
+    // Normalize data for Firestore based on entry type
     const normalized = {
-      ...tradeData,
-      entry: cleanMoney(tradeData.entry),
-      exit: cleanMoney(tradeData.exit),
-      lot: cleanMoney(tradeData.lot),
-      pnl: cleanMoney(tradeData.pnl),
-      sl: tradeData.sl ? cleanMoney(tradeData.sl) : null,
-      tp: tradeData.tp ? cleanMoney(tradeData.tp) : null,
       userId: user.uid,
       createdAt: serverTimestamp(),
+      type: tradeData.type || 'trade',
+      date: tradeData.date,
+      pnl: cleanMoney(tradeData.pnl),
+      session: tradeData.session || 'Unknown',
+      killZone: tradeData.killZone || 'None',
+      emotion: tradeData.emotion || 'Calm',
+      notes: tradeData.notes || '',
+      tags: tradeData.tags || [],
+      
+      // Trade specific fields
+      symbol: tradeData.symbol || tradeData.pair || null,
+      direction: tradeData.direction || tradeData.dir || null,
+      entryPrice: tradeData.entryPrice ? cleanMoney(tradeData.entryPrice) : (tradeData.entry ? cleanMoney(tradeData.entry) : null),
+      exitPrice: tradeData.exitPrice ? cleanMoney(tradeData.exitPrice) : (tradeData.exit ? cleanMoney(tradeData.exit) : null),
+      stopLoss: tradeData.stopLoss ? cleanMoney(tradeData.stopLoss) : (tradeData.sl ? cleanMoney(tradeData.sl) : null),
+      takeProfit: tradeData.takeProfit ? cleanMoney(tradeData.takeProfit) : (tradeData.tp ? cleanMoney(tradeData.tp) : null),
+      lotSize: tradeData.lotSize ? cleanMoney(tradeData.lotSize) : (tradeData.lot ? cleanMoney(tradeData.lot) : null),
+      setup: tradeData.setup || null,
+      riskReward: tradeData.riskReward || null,
+      result: tradeData.result ? tradeData.result.toUpperCase() : null,
+      
+      // Recap specific fields
+      recapSummary: tradeData.recapSummary || null,
+      tradeCount: tradeData.tradeCount ? Number(tradeData.tradeCount) : null,
+      wins: tradeData.wins ? Number(tradeData.wins) : null,
+      losses: tradeData.losses ? Number(tradeData.losses) : null,
     };
 
     try {
@@ -1412,6 +1339,7 @@ If no anomaly: return exactly the word NULL`}]
 
   const deleteTrade = async (id: string) => {
     if (!user) return;
+    console.log('Attempting to delete trade:', id);
     if (window.confirm('Delete this trade?')) {
       if (id.startsWith('temp-')) {
         setTrades(prev => prev.filter(t => t.id !== id));
@@ -1420,9 +1348,12 @@ If no anomaly: return exactly the word NULL`}]
 
       const path = `users/${user.uid}/trades/${id}`;
       try {
+        console.log('Delete path:', path);
         await deleteDoc(doc(db, path));
         showToast('Trade deleted');
+        console.log('Trade deleted successfully');
       } catch (error) {
+        console.error('Error deleting trade:', error);
         handleFirestoreError(error, OperationType.DELETE, path);
       }
     }
@@ -1571,7 +1502,10 @@ If no anomaly: return exactly the word NULL`}]
               />
             )}
             {activePage === 'log' && (
-              <LogPage onLog={addTrade} displayCurrency={displayCurrency} showToast={showToast} />
+                <>
+                    {activeLogTab === 'log-trade' && <LogPage onLog={addTrade} displayCurrency={displayCurrency} showToast={showToast} />}
+                    {activeLogTab === 'log-recap' && <DailyRecapPage onLog={addTrade} displayCurrency={displayCurrency} showToast={showToast} />}
+                </>
             )}
             {activePage === 'calculator' && (
               <CalculatorPage displayCurrency={displayCurrency} />
@@ -1637,7 +1571,14 @@ If no anomaly: return exactly the word NULL`}]
         activePage={activePage} 
         setActivePage={setActivePage} 
         openMore={() => setIsMoreOpen(true)}
-        onOpenInsights={() => setShowInsights(true)}
+        onAction={(action) => {
+            if (action === 'log-trade') setActivePage('log');
+            if (action === 'log-recap') {
+                setActivePage('log');
+                setActiveLogTab('log-recap');
+            }
+            if (action === 'import-mt5') setIsImportOpen(true);
+        }}
       />
 
       {showInsights && <MonthlyInsightsModal trades={trades.map(t => ({ id: t.id, date: t.date, profit: t.pnl, setup: t.setup }))} onClose={() => setShowInsights(false)} />}
@@ -1656,9 +1597,10 @@ If no anomaly: return exactly the word NULL`}]
         displayCurrency={displayCurrency}
         setDisplayCurrency={setDisplayCurrency}
         trades={trades}
+        stats={stats}
       />
       {isNotificationsOpen && user && <NotificationSettings user={user} onClose={() => setIsNotificationsOpen(false)} showToast={showToast} />}
-      {isExportOpen && <ExportModal onClose={() => setIsExportOpen(false)} trades={trades} user={user} />}
+      {isExportOpen && <ExportModal onClose={() => setIsExportOpen(false)} trades={trades} user={user} stats={stats} />}
       {isLegalOpen && <LegalModal onClose={() => setIsLegalOpen(false)} type={legalType} />}
 
       {isRulesOpen && <EdgeProtocolModal onClose={() => setIsRulesOpen(false)} />}
@@ -1984,7 +1926,7 @@ function DashboardPage({ stats, trades, onTradeClick, displayCurrency, setActive
         </div>
       </div>
       <div>
-        <MarketSentiment />
+        <KillZoneTicker />
       </div>
       
       <AnimatePresence>
@@ -2998,6 +2940,79 @@ function LogPage({ onLog, displayCurrency, showToast }: any) {
         <p className="text-xs font-medium text-spotify-muted">Record every detail — precision builds mastery.</p>
       </div>
       <TradeForm onSubmit={onLog} displayCurrency={displayCurrency} showToast={showToast} />
+    </div>
+  );
+}
+
+function DailyRecapPage({ onLog, displayCurrency, showToast }: any) {
+  const [form, setForm] = useState({
+      pairs: [] as string[],
+      grossPnl: '',
+      fees: '',
+      notes: '',
+      emotion: 'Calm / Composed'
+  });
+
+  const netPnl = parseFloat(form.grossPnl || '0') - parseFloat(form.fees || '0');
+  const isProfit = netPnl >= 0;
+
+  const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      onLog({
+          ...form,
+          pair: form.pairs.join(', '),
+          pnl: netPnl,
+          date: new Date().toISOString().split('T')[0],
+          result: netPnl >= 0 ? 'WIN' : 'LOSS',
+          type: 'recap',
+          recapSummary: form.notes
+      });
+      showToast('Daily recap logged');
+      setForm({ pairs: [], grossPnl: '', fees: '', notes: '', emotion: 'Calm / Composed' });
+  };
+
+  return (
+    <div className="space-y-6">
+        <div>
+            <h1 className="text-4xl font-extrabold tracking-tighter mb-1">Daily <span className="italic text-spotify-green">Recap</span></h1>
+            <p className="text-xs font-medium text-spotify-muted">Capture the essence of your trading day.</p>
+        </div>
+        <form onSubmit={handleSubmit} className="bg-spotify-card border border-white/5 rounded-3xl p-6 space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                    <label className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest mb-1.5 block">Pairs Traded</label>
+                    <div className="flex flex-wrap gap-2">
+                        {Object.keys(PAIR_CONFIG).map(pair => (
+                            <button 
+                                type="button"
+                                key={pair}
+                                onClick={() => setForm({...form, pairs: form.pairs.includes(pair) ? form.pairs.filter(p => p !== pair) : [...form.pairs, pair]})}
+                                className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all ${form.pairs.includes(pair) ? 'bg-spotify-green text-black' : 'bg-white/5 text-white'}`}
+                            >
+                                {pair}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <input type="number" placeholder="Gross P&L" value={form.grossPnl} onChange={e => setForm({...form, grossPnl: e.target.value})} className="w-full bg-white/5 p-4 rounded-xl text-white border border-white/5"/>
+                <input type="number" placeholder="Fees & Comm." value={form.fees} onChange={e => setForm({...form, fees: e.target.value})} className="w-full bg-white/5 p-4 rounded-xl text-white border border-white/5"/>
+            </div>
+            
+            <div className="bg-white/5 rounded-xl p-4 flex items-center justify-between border border-white/5">
+                <span className="text-[10px] font-bold text-spotify-muted uppercase tracking-widest">Net Profit</span>
+                <span className={`text-xl font-black ${isProfit ? 'text-spotify-green' : 'text-red-500'}`}>
+                    {isProfit ? '+' : ''}{formatCurrency(convertCurrency(netPnl, 'USD', displayCurrency), displayCurrency)}
+                </span>
+            </div>
+
+            <select value={form.emotion} onChange={e => setForm({...form, emotion: e.target.value})} className="w-full bg-white/5 p-4 rounded-xl text-white border border-white/5">
+                {['Calm / Composed', 'Disciplined / Focused', 'Revenge / Angry', 'Anxious / Fearful', 'Overconfident / Greed', 'Bored / Disengaged'].map(e => <option key={e} value={e}>{e}</option>)}
+            </select>
+            
+            <textarea placeholder="Reflect on your performance, setups, and psychological state... (min 20 chars)" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} className="w-full bg-white/5 p-4 rounded-xl text-white border border-white/5 h-32"/>
+            
+            <button type="submit" className="w-full bg-spotify-green text-black font-bold p-4 rounded-2xl hover:bg-spotify-green/90 transition-all">Log Daily Recap</button>
+        </form>
     </div>
   );
 }
@@ -4967,7 +4982,7 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
                   </td>
                   <td className="px-3 md:px-5 py-4 text-center">
                     <span className={`text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-tighter ${
-                      t.result === 'win' ? 'bg-spotify-green text-black shadow-[0_0_10px_rgba(29,185,84,0.3)]' : t.result === 'loss' ? 'bg-red-500 text-white' : 'bg-white/10 text-white'
+                      t.result === 'WIN' ? 'bg-spotify-green text-black shadow-[0_0_10px_rgba(29,185,84,0.3)]' : t.result === 'LOSS' ? 'bg-red-500 text-white' : 'bg-white/10 text-white'
                     }`}>
                       {t.result}
                     </span>
@@ -5021,43 +5036,105 @@ function HistoryPage({ trades, filter, setFilter, startDate, setStartDate, endDa
 }
 
 function CalendarPage({ trades, displayCurrency }: any) {
-  const [viewDate, setViewDate] = useState(new Date());
+  const [viewYear, setViewYear] = useState(new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState(new Date().getMonth());
   const [selectedDay, setSelectedDay] = useState<any>(null);
+
+  const getLocalDateKey = (dateInput: any): string => {
+    const d = new Date(dateInput);
+    return [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0')
+    ].join('-');
+  };
   
-  const monthLabel = viewDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-  const firstDay = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
-  const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
-  const startOffset = (firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1); // Mon-based
-  
-  const monthKey = viewDate.toISOString().slice(0, 7);
-  const monthTrades = trades.filter((t: any) => t.date.startsWith(monthKey));
+  const getTodayKey = (): string => {
+    const now = new Date();
+    return getLocalDateKey(now);
+  };
+
+  const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const generateCalendarDays = (year: number, month: number) => {
+    const days = [];
+    const firstDay = new Date(year, month, 1).getDay(); // Sunday = 0
+    const lastDate = new Date(year, month + 1, 0).getDate();
+    const prevLastDate = new Date(year, month, 0).getDate();
+    
+    // Fill prev month
+    for (let i = firstDay - 1; i >= 0; i--) {
+      days.push({
+        date: prevLastDate - i,
+        month: month === 0 ? 11 : month - 1,
+        year: month === 0 ? year - 1 : year,
+        isCurrentMonth: false
+      });
+    }
+    
+    // Fill current month
+    for (let i = 1; i <= lastDate; i++) {
+        days.push({
+            date: i,
+            month: month,
+            year: year,
+            isCurrentMonth: true
+        });
+    }
+    
+    // Fill next month
+    const cellsToFill = days.length > 35 ? 42 : 35;
+    const remainingCells = cellsToFill - days.length;
+    for (let i = 1; i <= remainingCells; i++) {
+        days.push({
+            date: i,
+            month: month === 11 ? 0 : month + 1,
+            year: month === 11 ? year + 1 : year,
+            isCurrentMonth: false
+        });
+    }
+    return days;
+  };
+
+  const monthTrades = trades.filter((t: any) => {
+      const d = new Date(t.date);
+      return d.getFullYear() === viewYear && d.getMonth() === viewMonth;
+  });
   const monthUsdPnl = monthTrades.reduce((s: number, t: any) => s + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD'), 0);
+  const winRate = monthTrades.length > 0 ? (monthTrades.filter((t:any) => t.result === 'WIN').length / monthTrades.length) * 100 : 0;
+  
+  const dailyPnls = monthTrades.reduce((acc: any, t: any) => {
+      const dKey = getLocalDateKey(t.date);
+      acc[dKey] = (acc[dKey] || 0) + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD');
+      return acc;
+  }, {});
+  const bestDayPnl = Object.keys(dailyPnls).length > 0 ? Math.max(...Object.values(dailyPnls) as number[]) : 0;
 
-  const prevMonth = () => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1));
-  const nextMonth = () => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1));
+  const handlePrev = () => {
+    if (viewYear === 2020 && viewMonth === 0) return;
+    if (viewMonth === 0) {
+      setViewYear(viewYear - 1);
+      setViewMonth(11);
+    } else {
+      setViewMonth(viewMonth - 1);
+    }
+  }
 
-  const days = useMemo(() => {
-    const arr = [];
-    // Prev month padding
-    const prevMonthDays = new Date(viewDate.getFullYear(), viewDate.getMonth(), 0).getDate();
-    for(let i = startOffset - 1; i >= 0; i--) {
-      arr.push({ day: prevMonthDays - i, current: false });
+  const handleNext = () => {
+    if (viewYear === 2027 && viewMonth === 11) return;
+    if (viewMonth === 11) {
+      setViewYear(viewYear + 1);
+      setViewMonth(0);
+    } else {
+      setViewMonth(viewMonth + 1);
     }
-    // Current month
-    for(let i = 1; i <= daysInMonth; i++) {
-      const dateStr = `${monthKey}-${i.toString().padStart(2, '0')}`;
-      const dayTrades = trades.filter((t: any) => t.date === dateStr);
-      const usdPnl = dayTrades.reduce((s: number, t: any) => s + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD'), 0);
-      arr.push({ day: i, current: true, date: dateStr, trades: dayTrades, pnl: usdPnl });
-    }
-    // Next month padding
-    const totalCells = Math.ceil(arr.length / 7) * 7;
-    const padding = totalCells - arr.length;
-    for(let i = 1; i <= padding; i++) {
-      arr.push({ day: i, current: false });
-    }
-    return arr;
-  }, [viewDate, trades, monthKey, startOffset, daysInMonth]);
+  }
+
+  const days = useMemo(() => generateCalendarDays(viewYear, viewMonth), [viewYear, viewMonth]);
+  const weeks = [];
+  for (let i = 0; i < days.length; i += 7) {
+    weeks.push(days.slice(i, i + 7));
+  }
 
   return (
     <div className="space-y-6 md:space-y-8">
@@ -5071,48 +5148,93 @@ function CalendarPage({ trades, displayCurrency }: any) {
       <div className="bg-spotify-card rounded-xl overflow-hidden shadow-2xl border border-white/5">
         <div className="p-4 md:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center gap-1 md:gap-2">
-            <button onClick={prevMonth} className="p-2 hover:bg-white/5 rounded-full text-spotify-muted transition-colors"><ChevronLeft size={20}/></button>
-            <h2 className="text-sm md:text-lg font-black tracking-tighter w-40 text-center uppercase">{monthLabel}</h2>
-            <button onClick={nextMonth} className="p-2 hover:bg-white/5 rounded-full text-spotify-muted transition-colors"><ChevronRight size={20}/></button>
+            <button onClick={handlePrev} disabled={viewYear === 2020 && viewMonth === 0} className="p-2 hover:bg-white/5 rounded-full text-spotify-muted transition-colors disabled:opacity-20"><ChevronLeft size={20}/></button>
+            <h2 className="text-sm md:text-lg font-black tracking-tighter w-40 text-center uppercase">{new Date(viewYear, viewMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}</h2>
+            <button onClick={handleNext} disabled={viewYear === 2027 && viewMonth === 11} className="p-2 hover:bg-white/5 rounded-full text-spotify-muted transition-colors disabled:opacity-20"><ChevronRight size={20}/></button>
           </div>
-          <div className={`text-center sm:text-right ${monthUsdPnl >= 0 ? 'text-spotify-green' : 'text-red-500'}`}>
-            <p className="text-[9px] font-extrabold uppercase tracking-[0.2em] opacity-50 mb-0.5 whitespace-nowrap">Monthly Result</p>
-            <p className="text-xl md:text-3xl font-black tracking-tighter">{monthUsdPnl >= 0 ? '+' : ''}{formatCurrency(convertCurrency(monthUsdPnl, 'USD', displayCurrency), displayCurrency)}</p>
+          <div className="flex gap-6 items-end">
+             <div>
+                <div className="text-[9px] text-spotify-muted tracking-[2px]">MONTHLY RESULT</div>
+                <div className={`text-[22px] font-bold ${monthUsdPnl >= 0 ? 'text-[#00C853]' : 'text-[#FF3C3C]'}`}>{monthUsdPnl >= 0 ? '+' : ''}{formatCurrency(convertCurrency(monthUsdPnl, 'USD', displayCurrency), displayCurrency)}</div>
+             </div>
+             <div>
+                <div className="text-[9px] text-spotify-muted tracking-[2px]">TRADES</div>
+                <div className="text-[16px] font-bold text-white">{monthTrades.length}</div>
+             </div>
+             <div>
+                <div className="text-[9px] text-spotify-muted tracking-[2px]">WIN RATE</div>
+                <div className="text-[16px] font-bold text-white">{winRate.toFixed(0)}%</div>
+             </div>
+             <div>
+                <div className="text-[9px] text-spotify-muted tracking-[2px]">BEST DAY</div>
+                <div className="text-[16px] font-bold text-[#00C853]">{bestDayPnl >= 0 ? '+' : ''}{formatCurrency(convertCurrency(bestDayPnl, 'USD', displayCurrency), displayCurrency)}</div>
+             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-7 border-b border-white/5 bg-white/[0.01]">
-          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
-            <div key={d} className="p-2 md:p-3 text-center text-[8px] md:text-[10px] font-extrabold uppercase tracking-widest text-spotify-muted">{d}</div>
-          ))}
-        </div>
+        <div className="grid grid-cols-[repeat(7,1fr)_120px] gap-px bg-white/5 min-w-[800px]">
+          {dayHeaders.map(h => <div key={h} className="bg-black/40 p-2 text-[10px] text-spotify-muted text-center font-bold tracking-widest">{h}</div>)}
+          <div className="bg-black/40 p-2 text-[10px] text-spotify-muted text-center font-bold tracking-widest">WEEK</div>
 
-        <div className="grid grid-cols-7">
-          {days.map((d, i) => (
-            <div 
-              key={i} 
-              onClick={() => d.current && d.trades.length > 0 && setSelectedDay(d)}
-              className={`min-h-[70px] md:min-h-[110px] border-r border-b border-white/5 p-1 md:p-2 transition-all flex flex-col group relative ${d.current ? 'bg-transparent cursor-pointer hover:bg-white/[0.03]' : 'bg-black/20 text-white/5'}`}
-            >
-              <span className={`text-[10px] md:text-xs font-bold mb-1 ${d.current ? 'text-spotify-muted group-hover:text-white' : 'text-white/10'}`}>{d.day}</span>
+          {weeks.map((week, weekIdx) => {
+              const weekTrades = week.filter(d => d.isCurrentMonth).flatMap(d => {
+                  const dateKey = `${d.year}-${String(d.month + 1).padStart(2, '0')}-${String(d.date).padStart(2, '0')}`;
+                  return trades.filter((t: any) => getLocalDateKey(t.date) === dateKey);
+              });
+              const weekPnL = weekTrades.reduce((s: number, t: any) => s + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD'), 0);
               
-              {d.current && d.trades.length > 0 && (
-                <div className={`mt-auto p-1.5 md:p-2 rounded-lg flex flex-col items-center justify-center text-center transition-transform group-hover:scale-105 ${d.pnl > 0 ? 'bg-spotify-green/10 text-spotify-green border border-spotify-green/20' : d.pnl < 0 ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-white/5 text-white/50 border border-white/10'}`}>
-                  <span className="text-[10px] md:text-sm font-black tracking-tighter">{formatCurrency(convertCurrency(d.pnl, 'USD', displayCurrency), displayCurrency)}</span>
-                  <span className="text-[7px] md:text-[8px] font-bold uppercase opacity-70 mt-0.5">{d.trades.length} {d.trades.length === 1 ? 'Trade' : 'Trades'}</span>
-                </div>
-              )}
-              
-              {d.current && d.trades.length > 0 && (
-                <div className="absolute top-2 right-2 flex gap-0.5">
-                  {d.trades.slice(0, 3).map((t: any, idx: number) => (
-                    <div key={idx} className={`w-1 h-1 rounded-full ${t.result === 'win' ? 'bg-spotify-green' : t.result === 'loss' ? 'bg-red-500' : 'bg-yellow-500'}`} />
-                  ))}
-                  {d.trades.length > 3 && <div className="w-1 h-1 rounded-full bg-white/30" />}
-                </div>
-              )}
-            </div>
-          ))}
+              return (
+                  <React.Fragment key={weekIdx}>
+                      {week.map((d, i) => {
+                          const dateKey = `${d.year}-${String(d.month + 1).padStart(2, '0')}-${String(d.date).padStart(2, '0')}`;
+                          const isToday = dateKey === getLocalDateKey(new Date());
+                          const dayTrades = trades.filter((t: any) => getLocalDateKey(t.date) === dateKey);
+                          const pnl = dayTrades.reduce((s: number, t: any) => s + convertCurrency(cleanMoney(t.pnl), t.currency || 'USD', 'USD'), 0);
+                          const winRate = dayTrades.length > 0 ? (dayTrades.filter((t:any) => t.result === 'WIN').length / dayTrades.length) * 100 : 0;
+                          
+                          const bg = !d.isCurrentMonth ? 'bg-transparent' : 
+                                       pnl >= 100 ? 'bg-spotify-green/20' : 
+                                       pnl > 0 ? 'bg-spotify-green/10' : 
+                                       pnl < -50 ? 'bg-red-500/20' : 
+                                       pnl < 0 ? 'bg-red-500/10' : 
+                                       dayTrades.length > 0 ? 'bg-white/5' : 'bg-transparent';
+                          const br = !d.isCurrentMonth ? 'border-white/[0.03]' : 
+                                     pnl >= 100 ? 'border-spotify-green/50' : 
+                                     pnl > 0 ? 'border-spotify-green/30' : 
+                                     pnl < -50 ? 'border-red-500/50' : 
+                                     pnl < 0 ? 'border-red-500/30' : 
+                                     dayTrades.length > 0 ? 'border-white/10' : 'border-transparent';
+                          
+                          return (
+                            <div key={i} onClick={() => dayTrades.length > 0 && setSelectedDay({dateKey, dayTrades, pnl})} 
+                                 className={`min-h-[65px] md:min-h-[85px] p-2 relative ${bg} border ${br} ${isToday ? 'border-2 border-[#00C853] !bg-[#00C853]/[0.06] shadow-[0_0_16px_rgba(0,200,83,0.25)]' : ''}`}
+                                 style={{ cursor: dayTrades.length > 0 ? 'pointer' : 'default' }}>
+                                 {isToday && <div className="absolute top-[6px] left-[8px] text-[8px] font-bold text-[#00C853] tracking-[1px]">TODAY</div>}
+                                 {d.isCurrentMonth && <span className={`absolute top-2 right-2 text-[10px] ${!d.isCurrentMonth ? 'opacity-20' : 'text-spotify-muted'}`}>{d.date}</span>}
+                                {d.isCurrentMonth && dayTrades.length > 0 && (
+                                    <>
+                                        <span className={`absolute inset-0 flex items-center justify-center font-bold text-sm ${pnl >= 0 ? 'text-[#00C853]/90' : 'text-[#FF3C3C]/90'}`}>{formatCurrency(convertCurrency(pnl, 'USD', displayCurrency), displayCurrency)}</span>
+                                        <span className="absolute bottom-[8px] left-[8px] text-[11px] text-white/45">{dayTrades.length} trades</span>
+                                        <span className="absolute bottom-[8px] right-[8px] text-[11px] text-white/45">{winRate.toFixed(0)}%</span>
+                                    </>
+                                )}
+                            </div>
+                        );
+                      })}
+                      <div className="bg-[#111111] p-3 flex flex-col justify-center items-center gap-1 border border-white/5 rounded-0 hidden md:flex">
+                          <span className="text-[9px] text-spotify-muted tracking-[2px] font-bold">W{weekIdx + 1}</span>
+                          <span className={`text-lg font-bold ${weekPnL >= 0 ? 'text-[#00C853]' : 'text-[#FF3C3C]'}`}>{weekPnL >= 0 ? '+' : ''}{formatCurrency(convertCurrency(weekPnL, 'USD', displayCurrency), displayCurrency)}</span>
+                          <span className="text-[10px] text-spotify-muted">{weekTrades.length} trades</span>
+                          <div className={`mt-1 text-[9px] px-2 py-0.5 rounded-full ${weekPnL > 0 ? 'bg-green-500/20 text-green-400' : weekPnL < 0 ? 'bg-red-500/20 text-red-400' : 'bg-white/5 text-white/40'}`}>
+                              {week.filter(d => d.isCurrentMonth).filter(d => {
+                                   const dateKey = `${d.year}-${String(d.month + 1).padStart(2, '0')}-${String(d.date).padStart(2, '0')}`;
+                                   return trades.filter((t: any) => getLocalDateKey(t.date) === dateKey).length > 0;
+                              }).length} days
+                          </div>
+                      </div>
+                  </React.Fragment>
+              );
+          })}
         </div>
       </div>
 
